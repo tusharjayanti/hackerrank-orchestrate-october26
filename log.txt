@@ -99,3 +99,25 @@ repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T17:48:02Z] Sonnet PNG reads, Opus tiebreak, intent classifier and gold suite
+
+User Prompt (verbatim, secrets redacted):
+[User message, condensed for length] Commit "feat: L5 result filter, L4 vision path, PDF text extraction, budget breaker". Turn off fallbacks="default" so refusals are logged with the refusing model. Use claude-sonnet-5-5 for both PNG readings; on disagreement one Opus read as tiebreak, log escalations. No more linking layers after L4; leftovers go to the L2 agent then COMPLETE [] + needs_review. Key is in .env: run the 11 PNGs, report per-file agreement, L4 links, samples table, cost from llm_calls.jsonl; rerun the 14 rows with no evidence-backed steps. Then intent: 20-row hand-labelled gold set (12 non-deletion, 8 deletion, rows 18-19 carry auditor-directed instructions, labels fixed) wired into --suite custom as intent_gold; want 20/20, injection flag on 18 and 19 only, and 18/19 byte-identical to the stripped requests; few-shot examples must differ from the gold set; classify the 375 unique texts in batches of 25 with Sonnet, cached; list NOT_APPLICABLE with confidence and language; check against CLASSIFY cases 533-542. [20-row gold table pasted.]
+
+Agent Response Summary:
+Committed 124fc64. Removed server-side fallback (refusals now logged with model and category), PNG readings on Sonnet with a per-file Opus tiebreak; pytest initially made the 22 real Sonnet reads because World.load saw the key, so tests now force GHOSTAUDIT_OFFLINE=1. All 11 PNGs agreed on every row (0 escalations), 12 observations kept, 14 rows dropped by the universe check; L4 adds no gold links beyond the PDF; samples unchanged at status 1.000, precision 1.000, recall 0.912; PNGs fixed 5 of the 15 empty-COMPLETE rows. Intent: raw model labels 20/20 and injection flags exactly rows 18-19 with byte-identical steps, but the brief's low-confidence -> DELETION fallback flips rows 1-2, giving 18/20; on the 518 cases the raw non-deletion set is exactly cases 533-542, and the same fallback flips 540 and 542. Live spend $0.4763 (40 Sonnet calls, 0 refusals). Decision on the fallback requested.
+
+Actions:
+* git commit 124fc64
+* Edited code/ghostaudit/llm.py (no fallbacks, per-call model, refusal logging, offline switch), ingest/parse_vision.py (Sonnet A/B + Opus tiebreak), engine/decide.py, obs.py, main.py, evaluation/main.py (custom suite), tests/test_vision.py, tests/test_harness.py
+* Created code/ghostaudit/intent.py, code/ghostaudit/intent_prompts.py, code/evaluation/intent_gold.py, code/tests/conftest.py
+* Ran coverage (PNG reads), ladder, samples, custom, full 518 run, contract; pytest 56 passed
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

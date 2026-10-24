@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 
 from ..identity import normalize_identifier
-from ..llm import LLM, LLMUnavailable, image_block
+from ..llm import LLM, MODEL, SONNET, LLMUnavailable, image_block
 from ..obs import get_logger
 from ..schemas import EXPOSURE, ObservedState
 from . import vision_prompts as vp
@@ -93,11 +93,12 @@ def _parse_pdf(f: EvidenceFile, universe: Universe) -> ParseResult:
 
 # ---------------------------------------------------------------- PNG
 
-def _reading(f: EvidenceFile, llm: LLM, instruction: str, tag: str) -> list[dict]:
+def _reading(f: EvidenceFile, llm: LLM, instruction: str, tag: str, model: str) -> dict[str, dict]:
     content = [image_block(f.path, "image/png"), {"type": "text", "text": instruction}]
     out = llm.json_call(purpose=f"vision:{tag}:{f.file_id}", prompt_version=f"{vp.PROMPT_VERSION}:{tag}",
-                        system=vp.SYSTEM, content=content, schema=vp.SCHEMA, max_tokens=8000, effort="medium")
-    return out.get("records", [])
+                        system=vp.SYSTEM, content=content, schema=vp.SCHEMA, max_tokens=8000, effort="medium",
+                        model=model)
+    return {r["resource_id"].strip(): r for r in out.get("records", [])}
 
 
 def _to_record(row: dict) -> dict:
@@ -121,38 +122,62 @@ def _ids(row: dict) -> frozenset[str]:
     return frozenset(normalize_identifier(v) for v in vals if v)
 
 
+def _observe(f: EvidenceFile, row: dict | None, tag: str):
+    if row is None:
+        return None
+    o = observe_record(f, f.captured_at, _to_record(row), absent=bool(row["not_found_or_deleted"]),
+                       source_detail=f"png:reading{tag}")
+    return None if o is None else (o, _ids(row))
+
+
+def _same(a, b) -> bool:
+    return a is not None and b is not None and a[0].state == b[0].state and a[1] == b[1]
+
+
 def _parse_png(f: EvidenceFile, universe: Universe, llm: LLM) -> ParseResult:
+    """Two Sonnet readings; any disagreement in the file triggers one Opus
+    reading of the whole file as tiebreak."""
     res = ParseResult()
-    readings = {tag: {r["resource_id"].strip(): r for r in _reading(f, llm, instr, tag)}
-                for tag, instr in (("A", vp.READING_A), ("B", vp.READING_B))}
-    for rid in sorted(set(readings["A"]) | set(readings["B"])):
-        res.rows += 1
+    readings = {"A": _reading(f, llm, vp.READING_A, "A", SONNET), "B": _reading(f, llm, vp.READING_B, "B", SONNET)}
+    rids = sorted(set(readings["A"]) | set(readings["B"]))
+    known = []
+    for rid in rids:
         if not RESOURCE_RE.fullmatch(rid) or not universe.known(rid):
             log.warning("vision_resource_unknown", file_id=f.file_id, resource_id=rid)
             res.notes.append(f"dropped unknown resource {rid}")
+            res.rows += 1
             res.skipped += 1
             continue
-        candidates = []
-        for tag in ("A", "B"):
-            row = readings[tag].get(rid)
-            if row is None:
-                continue
-            o = observe_record(f, f.captured_at, _to_record(row), absent=bool(row["not_found_or_deleted"]),
-                               source_detail=f"png:reading{tag}")
-            if o is not None:
-                candidates.append((o, _ids(row)))
-        if not candidates:
+        known.append(rid)
+    pairs = {rid: (_observe(f, readings["A"].get(rid), "A"), _observe(f, readings["B"].get(rid), "B"))
+             for rid in known}
+    disputed = [rid for rid, (a, b) in pairs.items() if not _same(a, b)]
+    tiebreak: dict[str, dict] = {}
+    if disputed:
+        log.info("vision_escalated", file_id=f.file_id, disputed=disputed, model=MODEL)
+        res.notes.append(f"escalated to {MODEL}: {disputed}")
+        tiebreak = _reading(f, llm, vp.READING_A, "T", MODEL)
+    for rid in known:
+        res.rows += 1
+        a, b = pairs[rid]
+        if rid not in disputed:
+            chosen, detail = a, "png:agreed"
+        else:
+            t = _observe(f, tiebreak.get(rid), "T")
+            winner = next((x for x in (a, b) if _same(x, t)), None)
+            if winner is not None:
+                chosen, detail = winner, "png:tiebreak"
+            else:
+                # No two readings agree: keep the one worse for the subject.
+                options = [x for x in (a, b, t) if x is not None]
+                chosen = max(options, key=lambda c: (EXPOSURE[c[0].state], len(c[1])))
+                detail = "png:disagreed"
+                log.warning("vision_disagreement", file_id=f.file_id, resource_id=rid,
+                            states=[x[0].state.value for x in options])
+        if chosen is None:
             res.skipped += 1
             continue
-        agree = (len(candidates) == 2 and candidates[0][0].state == candidates[1][0].state
-                 and candidates[0][1] == candidates[1][1])
-        # Worse for the subject: the more exposed state, then more identifiers.
-        chosen, _ = max(candidates, key=lambda c: (EXPOSURE[c[0].state], len(c[1])))
-        detail = "png:agreed" if agree else "png:disagreed"
-        if not agree:
-            log.warning("vision_disagreement", file_id=f.file_id, resource_id=rid,
-                        states=[c[0].state.value for c in candidates])
-        res.observations.append(chosen.model_copy(update={"vision": True, "source_detail": detail}))
+        res.observations.append(chosen[0].model_copy(update={"vision": True, "source_detail": detail}))
     return res
 
 

@@ -28,10 +28,12 @@ def test_pdf_user_reference_label_never_resolves_and_registers_attach_nothing():
 
 
 class FakeLLM:
-    def __init__(self, a, b):
-        self.answers = {"A": a, "B": b}
+    def __init__(self, a, b, t=None):
+        self.answers = {"A": a, "B": b, "T": t or []}
+        self.models = []
 
-    def json_call(self, *, prompt_version, **_):
+    def json_call(self, *, prompt_version, model, **_):
+        self.models.append(model)
         return {"records": self.answers[prompt_version.rsplit(":", 1)[1]]}
 
 
@@ -46,14 +48,23 @@ def row(rid, **kw):
 PNG = MANIFEST.by_id["evidence_19"]
 
 
-def test_png_agreement_keeps_row():
+def test_png_agreement_keeps_row_without_escalation():
     llm = FakeLLM([row("analytics_7438", emails=["a@b.com"])], [row("analytics_7438", emails=["A@B.com"])])
     [o] = parse_vision.parse(PNG, UNIVERSE, llm).observations
     assert o.source_detail == "png:agreed" and o.state is ObservedState.IDENTIFIABLE
+    assert llm.models == ["claude-sonnet-5-5", "claude-sonnet-5-5"]
 
 
-def test_png_disagreement_keeps_worse_reading_and_flags():
-    llm = FakeLLM([row("analytics_7438")], [row("analytics_7438", emails=["a@b.com"])])
+def test_png_disagreement_is_settled_by_one_opus_read():
+    llm = FakeLLM([row("analytics_7438")], [row("analytics_7438", emails=["a@b.com"])], [row("analytics_7438")])
+    [o] = parse_vision.parse(PNG, UNIVERSE, llm).observations
+    assert o.source_detail == "png:tiebreak" and o.state is ObservedState.ANONYMIZED
+    assert llm.models == ["claude-sonnet-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+
+
+def test_png_three_way_disagreement_keeps_worse_reading_and_flags():
+    llm = FakeLLM([row("analytics_7438")], [row("analytics_7438", emails=["a@b.com"])],
+                  [row("analytics_7438", user_references=["user_20"])])
     [o] = parse_vision.parse(PNG, UNIVERSE, llm).observations
     assert o.source_detail == "png:disagreed" and o.state is ObservedState.IDENTIFIABLE
 

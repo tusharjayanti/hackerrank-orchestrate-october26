@@ -11,6 +11,7 @@ from ..identity import IdentityIndex
 from ..ingest.activity import Activity
 from ..ingest.manifest import Manifest, parse_ts
 from ..ingest.observations import ObservationTable, build_table, category_for
+from ..intent import Classified
 from ..linking import CaseContext, Linker
 from ..llm import LLM, credentials_present
 from ..obs import get_logger
@@ -30,6 +31,7 @@ class World:
     activity: Activity
     linker: Linker
     rules: dict[DataCategory, RequiredAction]
+    llm: LLM | None = None
 
     @classmethod
     def load(cls, dataset_dir: Path = DATASET_DIR, formats: set[str] | None = None) -> World:
@@ -48,7 +50,7 @@ class World:
             with open(dataset_dir / name, newline="", encoding="utf-8") as f:
                 contexts.extend(c for c in (case_context(identity, r) for r in csv.DictReader(f)) if c)
         linker.prepare(contexts)
-        return cls(identity, manifest, table, activity, linker, load_rules(dataset_dir))
+        return cls(identity, manifest, table, activity, linker, load_rules(dataset_dir), llm)
 
 
 def case_context(identity: IdentityIndex, request: dict) -> CaseContext | None:
@@ -59,13 +61,23 @@ def case_context(identity: IdentityIndex, request: dict) -> CaseContext | None:
                        parse_ts(request["audit_at"]), request["reported_status"])
 
 
-def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SIBLING) -> tuple[Decision, dict]:
+def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SIBLING,
+                classified: Classified | None = None) -> tuple[Decision, dict]:
     case_id = request["case_id"]
     requested_at = parse_ts(request["requested_at"])
     reported_at = parse_ts(request["reported_at"])
     audit_at = parse_ts(request["audit_at"])
     flags: list[str] = []
     trace: dict = {"case_id": case_id, "audit_at": request["audit_at"]}
+    if classified is not None:
+        flags.extend(classified.flags)
+        trace["intent"] = {"label": classified.intent.label.value, "raw_label": classified.raw_label,
+                           "confidence": classified.intent.confidence, "language": classified.language,
+                           "injection_suspected": classified.intent.injection_suspected}
+        if not classified.intent.authorizes_deletion:
+            trace["flags"] = flags
+            return Decision(case_id=case_id, status=DeletionStatus.NOT_APPLICABLE, steps=(),
+                            flags=tuple(flags)), trace
 
     resolution = world.identity.resolve_email(request["email"])
     trace["identity"] = {"user_id": resolution.user_id, "match": resolution.kind.value}

@@ -15,6 +15,8 @@ def configure(level: str = "INFO") -> None:
     if _configured:
         return
     logging.basicConfig(stream=sys.stderr, level=level, format="%(message)s")
+    for noisy in ("httpx", "httpx2", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,

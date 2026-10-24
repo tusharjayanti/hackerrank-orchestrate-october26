@@ -17,12 +17,14 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
 from ghostaudit.guards import check_output, load_requests  # noqa: E402
 from ghostaudit.identity import IdentityIndex  # noqa: E402
 from ghostaudit.ingest.manifest import CitationRegistry, Manifest, parse_ts  # noqa: E402
-from ghostaudit.engine.decide import World, case_context  # noqa: E402
+from ghostaudit.engine.decide import World, case_context, decide_case  # noqa: E402
+from ghostaudit.intent import classify  # noqa: E402
 from ghostaudit.engine.state import out_of_scope  # noqa: E402
 from ghostaudit.ingest.activity import Activity  # noqa: E402
 from ghostaudit.ingest.observations import build_table  # noqa: E402
@@ -439,6 +441,73 @@ def suite_samples_observations(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- custom
+
+# Carrier for engine-identity checks: a real INCOMPLETE sample case whose
+# request text is swapped for the custom text.
+CARRIER_CASE = "case_24"
+
+
+def suite_custom(args: argparse.Namespace) -> int:
+    from intent_gold import INTENT_GOLD, STRIPPED
+
+    world = World.load(Path(args.dataset))
+    if world.llm is None:
+        print("custom: intent_gold needs model credentials (or a warm cache); none found", file=sys.stderr)
+        return 2
+    texts = [t for _, _, t, _, _ in INTENT_GOLD] + list(STRIPPED.values())
+    got = classify(texts, world.llm)
+    rows, failures = [], []
+    for n, lang, text, expected, inj_expected in INTENT_GOLD:
+        c = got[text]
+        ok_label = c.intent.label.value == expected
+        ok_inj = c.intent.injection_suspected == inj_expected
+        rows.append({"row": n, "lang_expected": lang, "lang": c.language, "expected": expected,
+                     "raw_label": c.raw_label, "label": c.intent.label.value, "confidence": c.intent.confidence,
+                     "injection_expected": inj_expected, "injection": c.intent.injection_suspected,
+                     "flags": list(c.flags), "ok": ok_label and ok_inj})
+        if not ok_label:
+            failures.append(f"row {n}: expected {expected}, got {c.intent.label.value} (raw {c.raw_label})")
+        if not ok_inj:
+            failures.append(f"row {n}: injection expected {inj_expected}, got {c.intent.injection_suspected}")
+
+    carrier = next(r for r in _requests(Path(args.dataset) / "sample_deletion_requests.csv")
+                   if r["case_id"] == CARRIER_CASE)
+    identity_checks = []
+    for n, stripped in STRIPPED.items():
+        text = next(t for m, _, t, _, _ in INTENT_GOLD if m == n)
+        outs = []
+        for variant in (text, stripped):
+            req = dict(carrier, request_text=variant)
+            decision, _ = decide_case(world, req, classified=got[variant])
+            row = decision.to_row()
+            outs.append((row["deletion_status"], row["steps_json"]))
+        same = outs[0] == outs[1]
+        identity_checks.append({"row": n, "carrier": CARRIER_CASE, "byte_identical": same,
+                                "status": outs[0][0], "stripped_flagged": got[stripped].intent.injection_suspected})
+        if not same:
+            failures.append(f"row {n}: steps differ from the stripped request")
+        if got[stripped].intent.injection_suspected:
+            failures.append(f"row {n}: stripped request was flagged as injection")
+
+    n_ok = sum(r["ok"] for r in rows)
+    report = {"suite": "custom", "group": "intent_gold", "label_accuracy": f"{n_ok}/{len(rows)}",
+              "rows": rows, "injection_identity": identity_checks, "failures": failures}
+    _write_report(args, "custom", report)
+    print(f"custom/intent_gold: {n_ok}/{len(rows)} rows correct (label and injection flag)")
+    print(f"  {'#':>2} {'lang':7s} {'expected':10s} {'raw':10s} {'effective':10s} conf  inj")
+    for r in rows:
+        mark = "" if r["ok"] else "  <-"
+        print(f"  {r['row']:2d} {r['lang_expected']}/{r['lang']:4s} {r['expected']:10s} {r['raw_label']:10s} "
+              f"{r['label']:10s} {r['confidence']:5s} {'yes' if r['injection'] else 'no'}{mark}")
+    for c in identity_checks:
+        print(f"  row {c['row']} vs stripped on {c['carrier']}: byte-identical={c['byte_identical']} "
+              f"status={c['status']} stripped flagged={c['stripped_flagged']}")
+    for f in failures:
+        print(f"  FAIL {f}")
+    return 0 if not failures else 1
+
+
 # ---------------------------------------------------------------- stubs
 
 def _stub(name: str):
@@ -452,7 +521,7 @@ SUITES = {
     "contract": suite_contract,
     "samples": suite_samples,
     "coverage": suite_coverage,
-    "custom": _stub("custom"),
+    "custom": suite_custom,
     "metamorphic": _stub("metamorphic"),
     "complete-check": _stub("complete-check"),
 }

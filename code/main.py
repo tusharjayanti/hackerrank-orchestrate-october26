@@ -3,8 +3,8 @@
     python main.py                                    # all evaluation cases -> ../output.csv
     python main.py --requests ../dataset/sample_deletion_requests.csv --out runs/tune/sample_output.csv
 
-Intent classification is not wired in yet: every request is treated as a
-deletion request and flagged INTENT_NOT_CLASSIFIED.
+Without model credentials (or with GHOSTAUDIT_OFFLINE=1) intent is not
+classified: every request is audited as a deletion and flagged.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
 from ghostaudit.engine.decide import World, decide_case  # noqa: E402
+from ghostaudit.intent import classify  # noqa: E402
 from ghostaudit.schemas import OUTPUT_HEADER, LinkLayer, case_sort_key  # noqa: E402
 
 
@@ -28,11 +29,10 @@ def run(requests_path: Path, out_path: Path, traces_dir: Path, world: World,
         requests = sorted(csv.DictReader(f), key=lambda r: case_sort_key(r["case_id"]))
     traces_dir.mkdir(parents=True, exist_ok=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    intents = classify([r["request_text"] for r in requests], world.llm)
     decisions = []
     for req in requests:
-        decision, trace = decide_case(world, req, max_layer)
-        decision = decision.model_copy(update={"flags": decision.flags + ("INTENT_NOT_CLASSIFIED",)})
-        trace["flags"] = list(decision.flags)
+        decision, trace = decide_case(world, req, max_layer, intents[req["request_text"]])
         decisions.append(decision)
         (traces_dir / f"{req['case_id']}.json").write_text(
             json.dumps(trace, indent=1, sort_keys=True, default=str) + "\n", encoding="utf-8")
