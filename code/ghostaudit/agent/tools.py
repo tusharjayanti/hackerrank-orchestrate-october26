@@ -1,28 +1,39 @@
 """Tool contract for the investigator agent (L2).
 
-The agent runs only on flagged cases. It can read and search evidence that
-was available at the case's audit_at, and it can ask the policy engine what a
-state means. It never writes steps: submit_decision hands the engine a set of
-cited observations, and the engine generates, orders and numbers the steps.
+The agent runs only on gated cases. It can read and search evidence that was
+available at the case's audit_at, and it can ask the policy engine what a
+state means. It never writes a resource id or a step: the engine generates
+candidate decisions for the case (agent/candidates.py), and submit_decision
+accepts only one of those candidates, by id.
 
 Every input model is strict (no type coercion) and forbids extra fields; the
 same models produce the JSON schemas sent to the model with strict: true.
+Tools run against a Session (the case under review, its engine trace and its
+candidates); outside a session the read-only tools still work and
+submit_decision refuses.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..engine.decide import World
 from ..engine.policy import treat
 from ..identity import normalize_identifier
 from ..ingest.manifest import parse_ts
 from ..ingest.observations import category_for, text_identifiers
+from ..obs import get_logger
 from ..schemas import DataCategory, ObservedState, ResourceState
+
+if TYPE_CHECKING:
+    from ..engine.decide import World
+    from .candidates import Candidate
+
+log = get_logger(__name__)
 
 MAX_FILE_CHARS = 20_000
 MAX_SEARCH_HITS = 50
@@ -54,34 +65,44 @@ class ApplyPolicyInput(ToolInput):
     evidence_id: str = Field(description="The file or activity id that shows this state.")
 
 
-class ProposedObservation(ToolInput):
-    system_id: str
-    resource_id: str
-    observed_state: ObservedState
-    evidence_id: str
-    quote: str = Field(description="The exact text in the evidence that shows the state and the link to the user.")
-
-
 class SubmitDecisionInput(ToolInput):
     case_id: str
-    outcome: Literal["engine_default", "with_observations"]
-    observations: tuple[ProposedObservation, ...] = ()
-    rationale: str = Field(max_length=600)
+    candidate_id: str = Field(description="The id of one candidate the engine generated for this case.")
+    steps_json: str | None = Field(description="null, or that candidate's steps_json copied exactly.")
+    rationale: str = Field(description="Two or three sentences: the evidence that decided the choice.")
 
 
 class ToolError(ValueError):
     """Returned to the model as an error tool_result; never fatal to the run."""
 
 
-def _request(world: World, case_id: str) -> dict:
+@dataclass
+class Session:
+    """The case one agent invocation is working on."""
+
+    request: dict
+    trace: dict
+    candidates: list[Candidate]
+    accepted: Candidate | None = None
+    rejections: list[str] = field(default_factory=list)
+
+    @property
+    def case_id(self) -> str:
+        return self.request["case_id"]
+
+
+def _request(world: World, case_id: str, session: Session | None) -> dict:
+    if session is not None:
+        if case_id != session.case_id:
+            raise ToolError(f"this investigation is {session.case_id}, not {case_id}")
+        return session.request
     req = world.requests.get(case_id)
     if req is None:
         raise ToolError(f"unknown case {case_id}")
     return req
 
 
-def _eligible(world: World, case_id: str, evidence_id: str) -> None:
-    req = _request(world, case_id)
+def _eligible(world: World, req: dict, evidence_id: str) -> None:
     f = world.manifest.by_id.get(evidence_id)
     if f is None:
         raise ToolError(f"{evidence_id} is not an evidence file")
@@ -89,28 +110,43 @@ def _eligible(world: World, case_id: str, evidence_id: str) -> None:
         raise ToolError(f"{evidence_id} was captured after this case's audit_at and cannot be used")
 
 
-def list_observations(world: World, inp: ListObservationsInput) -> dict:
+def _engine_trace(world: World, req: dict, session: Session | None) -> dict:
+    if session is not None:
+        return session.trace
+    from dataclasses import replace
+
+    from ..engine.decide import decide_case
+
+    # Engine-only (no model): never re-enters the agent.
+    return decide_case(replace(world, llm=None), req)[1]
+
+
+def list_observations(world: World, inp: ListObservationsInput, session: Session | None = None) -> dict:
     """What the engine already knows about the case.
 
     Input: case_id. Output: the resolved user, every linked resource with its
-    link layer, the observations behind each (file, time, state, identifiers),
-    held vision_only rows, and the case flags.
+    link layer, resources the scope rule left out, the observations behind
+    each (file, time, state, identifiers), the engine's treatments, held
+    vision_only rows, the case flags, and the candidate decisions (id,
+    description, status, number of steps).
     May decide: nothing. It is read-only.
     May not: return evidence captured after audit_at.
     """
-    from ..engine.decide import case_context, decide_case
+    req = _request(world, inp.case_id, session)
+    trace = _engine_trace(world, req, session)
+    uid = (trace.get("identity") or {}).get("user_id")
+    audit_at = parse_ts(req["audit_at"])
+    held = [o.model_dump(mode="json") for o in world.table.held_for_user(uid, audit_at)] if uid else []
+    out = {"identity": trace.get("identity"), "links": trace.get("links", []),
+           "out_of_scope": trace.get("out_of_scope", []), "observations": trace.get("observations", []),
+           "treatments": trace.get("treatments", []), "held_vision_only": held,
+           "flags_fired": trace.get("flags_fired", []), "notes": trace.get("notes", [])}
+    if session is not None:
+        out["candidates"] = [c.summary() for c in session.candidates]
+    return out
 
-    req = _request(world, inp.case_id)
-    _, trace = decide_case(world, req)
-    ctx = case_context(world.identity, req)
-    held = [o.model_dump(mode="json") for o in world.table.held_for_user(ctx.user_id, ctx.audit_at)] if ctx else []
-    return {"identity": trace.get("identity"), "links": trace.get("links", []),
-            "observations": trace.get("observations", []), "treatments": trace.get("treatments", []),
-            "held_vision_only": held, "flags_fired": trace.get("flags_fired", []),
-            "flag_details": trace.get("flag_details", [])}
 
-
-def read_evidence_file(world: World, inp: ReadEvidenceFileInput) -> dict:
+def read_evidence_file(world: World, inp: ReadEvidenceFileInput, session: Session | None = None) -> dict:
     """The raw content of one evidence file that existed at audit_at.
 
     Input: case_id, file_id. Output: text content (truncated at
@@ -119,30 +155,34 @@ def read_evidence_file(world: World, inp: ReadEvidenceFileInput) -> dict:
     May decide: nothing. May not: open a file captured after audit_at, or any
     path outside the evidence manifest.
     """
-    _eligible(world, inp.case_id, inp.file_id)
+    _eligible(world, _request(world, inp.case_id, session), inp.file_id)
     f = world.manifest.by_id[inp.file_id]
     if f.format == "png":
-        return {"file_id": f.file_id, "format": "png", "image_path": str(f.path)}
+        return {"file_id": f.file_id, "format": "png", "captured_at": f.captured_at.isoformat(),
+                "image_path": str(f.path)}
     if f.format == "pdf":
         import pypdf
 
         text = "\n".join(p.extract_text() or "" for p in pypdf.PdfReader(str(f.path)).pages)
     else:
         text = f.path.read_text(encoding="utf-8")
-    return {"file_id": f.file_id, "format": f.format, "truncated": len(text) > MAX_FILE_CHARS,
-            "content": text[:MAX_FILE_CHARS]}
+    return {"file_id": f.file_id, "format": f.format, "captured_at": f.captured_at.isoformat(),
+            "truncated": len(text) > MAX_FILE_CHARS, "content": text[:MAX_FILE_CHARS]}
 
 
-def search_raw_evidence(world: World, inp: SearchRawEvidenceInput) -> dict:
-    """Exact lexical search for one identifier across eligible raw files.
+def search_raw_evidence(world: World, inp: SearchRawEvidenceInput, session: Session | None = None) -> dict:
+    """Exact lexical search for one identifier across eligible raw text files
+    and system_activity rows.
 
     Input: case_id, identifier. Output: up to MAX_SEARCH_HITS hits of
-    (file_id, line number, line text). Matching is exact on the normalised
-    identifier (case-insensitive email, digits-only phone); there is no fuzzy
-    or partial matching, so near-identical decoys never match.
-    May decide: nothing. May not: search files captured after audit_at.
+    (file_id, line number, line text) or (activity_id, row text). Matching is
+    exact on the normalised identifier (case-insensitive email, digits-only
+    phone); there is no fuzzy or partial matching, so near-identical decoys
+    never match. Activity rows are claims, not proof of state.
+    May decide: nothing. May not: search files captured, or activity that
+    happened, after audit_at.
     """
-    req = _request(world, inp.case_id)
+    req = _request(world, inp.case_id, session)
     audit_at = parse_ts(req["audit_at"])
     needle = normalize_identifier(inp.identifier)
     hits = []
@@ -154,6 +194,15 @@ def search_raw_evidence(world: World, inp: SearchRawEvidenceInput) -> dict:
                 hits.append({"file_id": f.file_id, "line": n, "text": line[:400]})
                 if len(hits) >= MAX_SEARCH_HITS:
                     return {"hits": hits, "truncated": True}
+    for e in world.activity.events:
+        if e.event_time > audit_at:
+            break
+        if needle == e.resource_id.lower() or needle in _line_identifiers(e.details):
+            hits.append({"activity_id": e.activity_id, "text": f"{e.event_time.isoformat()} {e.event_type} "
+                         f"{e.source_system}->{e.target_system} {e.resource_id} {e.reported_result}: "
+                         f"{e.details}"[:400]})
+            if len(hits) >= MAX_SEARCH_HITS:
+                return {"hits": hits, "truncated": True}
     return {"hits": hits, "truncated": False}
 
 
@@ -167,7 +216,7 @@ def _line_identifiers(line: str) -> set[str]:
         {normalize_identifier(p) for p in text_identifiers(line)}
 
 
-def apply_policy(world: World, inp: ApplyPolicyInput) -> dict:
+def apply_policy(world: World, inp: ApplyPolicyInput, session: Session | None = None) -> dict:
     """What deletion_rules.csv requires for a resource in a given state.
 
     Input: case_id, system_id, resource_id, observed_state, evidence_id.
@@ -176,7 +225,7 @@ def apply_policy(world: World, inp: ApplyPolicyInput) -> dict:
     May decide: nothing; it reports the rule. May not: accept evidence
     captured after audit_at or a state the policy table does not cover.
     """
-    _eligible(world, inp.case_id, inp.evidence_id)
+    _eligible(world, _request(world, inp.case_id, session), inp.evidence_id)
     category: DataCategory | None = category_for(inp.system_id)
     state = ResourceState(system_id=inp.system_id, resource_id=inp.resource_id, data_category=category,
                           state=inp.observed_state, evidence_id=inp.evidence_id,
@@ -188,22 +237,30 @@ def apply_policy(world: World, inp: ApplyPolicyInput) -> dict:
             "verification": t.verification}
 
 
-def submit_decision(world: World, inp: SubmitDecisionInput) -> dict:
-    """End the investigation.
+def submit_decision(world: World, inp: SubmitDecisionInput, session: Session | None = None) -> dict:
+    """End the investigation by choosing one engine-generated candidate.
 
-    Input: case_id; outcome "engine_default" (keep the engine's decision) or
-    "with_observations" plus the cited observations the agent established;
-    a short rationale. Output: the decision the engine generates.
-    May decide: which cited observations exist (each must quote eligible
-    evidence). May not: write, reorder or number steps, set the status
-    directly, cite evidence captured after audit_at, or add a resource with
-    no quote.
+    Input: case_id; candidate_id (one of the ids listed for this case);
+    steps_json, either null or the chosen candidate's steps_json copied
+    byte for byte; a short rationale. Output: the accepted candidate.
+    May decide: which of the engine's candidates is the case's answer.
+    May not: write, edit, reorder or number steps, name a resource, set the
+    status directly, or submit an id or step list the engine did not
+    generate for this case. A rejected submission returns the reason.
     """
-    for o in inp.observations:
-        _eligible(world, inp.case_id, o.evidence_id)
-        if not o.quote.strip():
-            raise ToolError(f"{o.resource_id}: every observation needs a quote from the evidence")
-    raise NotImplementedError("engine re-run with agent observations is wired with the agent loop")
+    if session is None:
+        raise ToolError("submit_decision is only available inside an agent investigation")
+    _request(world, inp.case_id, session)
+    by_id = {c.id: c for c in session.candidates}
+    cand = by_id.get(inp.candidate_id)
+    if cand is None:
+        raise ToolError(f"{inp.candidate_id!r} is not a candidate for {session.case_id}; "
+                        f"valid ids: {sorted(by_id)}")
+    if inp.steps_json is not None and inp.steps_json != cand.steps_json:
+        raise ToolError(f"steps_json does not match candidate {cand.id} exactly; submit the id with "
+                        "steps_json null, or copy that candidate's steps_json unchanged")
+    session.accepted = cand
+    return {"accepted": True, "candidate_id": cand.id, "status": cand.status}
 
 
 TOOLS = {
@@ -213,27 +270,44 @@ TOOLS = {
     "apply_policy": (ApplyPolicyInput, apply_policy),
     "submit_decision": (SubmitDecisionInput, submit_decision),
 }
+ALLOWED = tuple(TOOLS)
 
 
-def run_tool(world: World, name: str, payload: dict) -> dict:
+def run_tool(world: World, name: str, payload: dict, session: Session | None = None) -> dict:
     """Validate a tool call exactly as the model sent it (JSON, strict) and
-    run it. Validation and tool errors come back as {"error": ...} so the
-    agent can correct itself; they never end the run."""
+    run it. Unknown tools, validation errors and any exception a tool raises
+    come back as {"error": ...} so the agent can correct itself; they never
+    end the run."""
     if name not in TOOLS:
-        return {"error": f"unknown tool {name}"}
+        return {"error": f"unknown tool {name}; allowed: {list(ALLOWED)}"}
     model, fn = TOOLS[name]
     try:
-        return fn(world, model.model_validate_json(json.dumps(payload)))
-    except (ValueError, NotImplementedError) as e:  # pydantic ValidationError and ToolError are ValueErrors
+        return fn(world, model.model_validate_json(json.dumps(payload)), session)
+    except ValueError as e:  # pydantic ValidationError and ToolError are ValueErrors
         return {"error": str(e)}
+    except Exception as e:  # noqa: BLE001 - a failing tool is a result, not a crash
+        log.error("agent_tool_failed", tool=name, error=repr(e))
+        return {"error": f"tool {name} failed: {type(e).__name__}: {e}"}
+
+
+# Keywords strict tool use does not accept; pydantic emits some of them.
+_UNSUPPORTED = {"maxLength", "minLength", "minimum", "maximum", "multipleOf", "default"}
+
+
+def _strict_schema(node):
+    if isinstance(node, dict):
+        out = {k: _strict_schema(v) for k, v in node.items() if k not in _UNSUPPORTED}
+        if out.get("type") == "object" and "properties" in out:
+            out["additionalProperties"] = False
+            out["required"] = sorted(out["properties"])
+        return out
+    if isinstance(node, list):
+        return [_strict_schema(v) for v in node]
+    return node
 
 
 def tool_specs() -> list[dict]:
     """Tool definitions for the Messages API, strict and schema-complete."""
-    specs = []
-    for name, (model, fn) in TOOLS.items():
-        schema = model.model_json_schema()
-        schema["additionalProperties"] = False
-        specs.append({"name": name, "description": (fn.__doc__ or "").strip(), "strict": True,
-                      "input_schema": schema})
-    return specs
+    return [{"name": name, "description": (fn.__doc__ or "").strip(), "strict": True,
+             "input_schema": _strict_schema(model.model_json_schema())}
+            for name, (model, fn) in TOOLS.items()]

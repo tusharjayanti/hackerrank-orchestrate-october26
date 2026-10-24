@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import DATASET_DIR
+from ..agent.loop import agent_trace, review_case
 from ..identity import IdentityIndex
 from ..ingest.activity import Activity
 from ..ingest.manifest import Manifest, parse_ts
@@ -68,7 +69,7 @@ def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SI
     audit_at = parse_ts(request["audit_at"])
     flags = FlagSet()
     notes: list[str] = []
-    trace: dict = {"case_id": case_id, "audit_at": request["audit_at"], "notes": notes}
+    trace: dict = {"case_id": case_id, "audit_at": request["audit_at"], "notes": notes, "agent": agent_trace()}
 
     def done(status: DeletionStatus, steps: tuple = ()) -> tuple[Decision, dict]:
         trace.update(flags.trace())
@@ -109,6 +110,9 @@ def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SI
         if o.source_detail == "png:disagreed":
             flags.add(Flag.VISION_DISAGREED, f"{o.file_id}:{o.resource_id}")
     trace["observations"] = [o.model_dump(mode="json") for o in case_obs]
+    # L2: gated cases go to the investigator agent, which may only choose
+    # between engine-generated candidates; trace["agent"] is set either way.
+    status, steps = review_case(world, request, max_layer, status, steps, flags, trace)
     return done(status, steps)
 
 

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -52,9 +54,19 @@ def test_tool_errors_come_back_as_results_not_exceptions():
     assert "error" in t.run_tool(WORLD, "drop_table", {})
 
 
-def test_submit_decision_rejects_late_evidence():
-    late = {"system_id": "account_service", "resource_id": "account_001", "observed_state": "ABSENT",
-            "evidence_id": "evidence_92", "quote": "404"}
+def test_submit_decision_only_runs_inside_an_investigation():
+    out = t.run_tool(WORLD, "submit_decision", {"case_id": "case_01", "candidate_id": "engine_default",
+                                                "steps_json": None, "rationale": "x"})
+    assert "only available inside" in out["error"]
+    # the old observation-list shape is not accepted
     out = t.run_tool(WORLD, "submit_decision", {"case_id": "case_01", "outcome": "with_observations",
-                                                "observations": [late], "rationale": "x"})
-    assert "captured after" in out["error"]
+                                                "observations": [], "rationale": "x"})
+    assert "error" in out
+
+
+def test_strict_schemas_carry_no_unsupported_keywords():
+    blob = json.dumps(t.tool_specs())
+    assert all(k not in blob for k in ('"maxLength"', '"minLength"', '"default"'))
+    for s in t.tool_specs():
+        sch = s["input_schema"]
+        assert sorted(sch["required"]) == sorted(sch["properties"])
