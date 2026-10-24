@@ -68,7 +68,8 @@ With uv (recommended):
 uv sync                      # creates .venv at the repo root from uv.lock
 ```
 
-With pip:
+With pip (any Python 3.12 interpreter; if `python3.12` is not on your PATH,
+`uv python install 3.12` provides one and `uv python find 3.12` prints its path):
 
 ```bash
 python3.12 -m venv .venv
@@ -110,7 +111,9 @@ Each run writes `code/runs/<mode>/<run_id>/traces/<case_id>.json` and
 
 ```bash
 .venv/bin/python code/evaluation/main.py --suite <suite> [--mode tune|measure]
-uv run pytest            # 120 offline tests (need dataset/ in place); they never call a model
+uv run pytest            # 120 offline tests (need dataset/ in place); they never call a model.
+                         # One checks the policy contract on a tune run's output and is
+                         # skipped until `code/main.py --mode tune` has run once.
 ```
 
 | Suite | Protects against | State |
@@ -191,7 +194,9 @@ replays them for nothing.
   `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea`, made
   with the configuration locked and the cache replayed:
   `ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= MODEL_VISION=claude-sonnet-5-5 MODEL_INTENT=claude-sonnet-5-5 MODEL_AGENT=claude-opus-5-5 .venv/bin/python code/main.py --mode measure`
-- Every run id is `<UTC time>-<request file>-<git short sha>[-dirty]`; the
+- Every run id is `<UTC time>-<request file>-<git short sha>[-dirty]`
+  (`nogit` in place of the sha outside a git checkout, e.g. an unzipped
+  `code.zip`); the
   manifest records it with the commit, models, model-access mode, budget
   breaker state and usage.
 - With the same cache, re-running the same commit replays every model answer,
