@@ -2,6 +2,8 @@
 
     python evaluation/main.py --suite contract [--output PATH --requests PATH]
     python evaluation/main.py --suite samples  [--pred PATH] [--mode tune|measure]
+    python evaluation/main.py --suite coverage | custom | metamorphic
+    python evaluation/main.py --suite complete-check [--output PATH --requests PATH]
 
 Reports are written to code/runs/<mode>/. Only --mode measure numbers go into
 evaluation_report.md; tune is for iteration.
@@ -20,7 +22,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
-from ghostaudit.guards import check_output, load_requests  # noqa: E402
+from ghostaudit.guards import (  # noqa: E402
+    categories_from_trace,
+    check_output,
+    citation_issues,
+    complete_check,
+    load_requests,
+    policy_issues,
+)
 from ghostaudit.identity import IdentityIndex  # noqa: E402
 from ghostaudit.ingest.manifest import CitationRegistry, Manifest, parse_ts  # noqa: E402
 from ghostaudit.engine.decide import World, case_context, decide_case  # noqa: E402
@@ -36,25 +45,124 @@ from scoring import STATUSES, read_output, render_dump, score  # noqa: E402
 # ---------------------------------------------------------------- contract
 
 def suite_contract(args: argparse.Namespace) -> int:
+    """Row contract, plus the policy contract (DELETE_RECORD never on kept
+    records; no activity-only resource). Category-based policy checks use
+    the traces of the run that wrote the output, when one is found."""
     output = Path(args.output)
     requests = load_requests(Path(args.requests))
     issues = check_output(output, requests, CitationRegistry.load(Path(args.dataset)))
+    traces = _traces_for(output)
+    rows = read_output(output) if output.is_file() else {}
+    for cid in sorted(rows, key=case_sort_key):
+        trace = _load_trace(traces, cid) if traces else None
+        issues.extend(policy_issues(cid, rows[cid][1], categories_from_trace(trace) if trace else None))
     report = {
         "suite": "contract",
         "output": str(output),
         "requests": str(args.requests),
+        "traces": str(traces) if traces else None,
         "rows_expected": len(requests),
         "violations": len(issues),
         "by_code": dict(sorted(Counter(i.code for i in issues).items())),
         "issues": [i.__dict__ for i in issues],
     }
     _write_report(args, "contract", report)
-    print(f"contract: {output} vs {len(requests)} requests -> {len(issues)} violations")
+    print(f"contract: {output} vs {len(requests)} requests -> {len(issues)} violations "
+          f"(policy categories from {'traces ' + str(traces) if traces else 'resource prefixes only: no run traces'})")
     for code, n in report["by_code"].items():
         print(f"  {code}: {n}")
     for i in issues[:20]:
         print(f"  [{i.code}] {i.case_id}: {i.detail}")
     return 0 if not issues else 1
+
+
+def _traces_for(output: Path) -> Path | None:
+    """Traces dir of the newest run whose manifest wrote this output."""
+    want = str(output.resolve())
+    best = None
+    for m in (CODE_ROOT / "runs").glob("*/*/run_manifest.json"):
+        try:
+            man = json.loads(m.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(Path(man.get("output", "")).resolve()) == want and (best is None or m.parent.name > best.name):
+            best = m.parent
+    return best / "traces" if best else None
+
+
+def _load_trace(traces: Path, case_id: str) -> dict | None:
+    p = traces / f"{case_id}.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
+
+
+# ---------------------------------------------------------------- complete-check
+
+def suite_complete_check(args: argparse.Namespace) -> int:
+    """Re-derive every COMPLETE row of an output from its cited evidence alone
+    (the same code as the per-row guard) and check every citation of every
+    row observes the resource it is cited for."""
+    world = World.load(Path(args.dataset))
+    output = Path(args.output)
+    rows = read_output(output)
+    requests = load_requests(Path(args.requests))
+    refuted, unsupported, citations, empty = [], [], [], []
+    n_complete = 0
+    for cid in sorted(rows, key=case_sort_key):
+        status, steps = rows[cid]
+        req = requests.get(cid)
+        if req is None:
+            continue
+        audit_at = parse_ts(req["audit_at"])
+        if status != "NOT_APPLICABLE":
+            citations.extend(citation_issues(cid, steps, audit_at, world))
+        if status != "COMPLETE":
+            continue
+        n_complete += 1
+        if not steps:
+            empty.append(cid)
+            continue
+        issues, derived_status, _ = complete_check(cid, steps, audit_at, world)
+        (refuted if derived_status.value == "INCOMPLETE" else unsupported).extend(issues)
+    report = {"suite": "complete-check", "output": str(output), "complete_rows": n_complete,
+              "refuted": [i.__dict__ for i in refuted], "unsupported": [i.__dict__ for i in unsupported],
+              "citation_issues": [i.__dict__ for i in citations], "complete_without_steps": empty}
+    _write_report(args, "complete_check", report)
+    bad_rows = {i.case_id for i in refuted + unsupported}
+    print(f"complete-check: {output}: {n_complete} COMPLETE rows, "
+          f"{n_complete - len(bad_rows) - len(empty)} re-derived exactly from cited evidence")
+    print(f"  refuted (cited evidence shows a violation): {len({i.case_id for i in refuted})} rows")
+    print(f"  unsupported (cited evidence does not give the claimed state): {len({i.case_id for i in unsupported})}")
+    print(f"  citations that do not observe their resource (all rows): {len(citations)}")
+    print(f"  COMPLETE with no steps (needs_review fallback): {', '.join(empty) or 'none'}")
+    for i in (refuted + unsupported + citations)[:20]:
+        print(f"  [{i.code}] {i.case_id}: {i.detail}")
+    return 0 if not (refuted or unsupported or citations) else 1
+
+
+# ---------------------------------------------------------------- metamorphic
+
+def _live_calls() -> int:
+    from ghostaudit.llm import CALL_LOG
+    if not CALL_LOG.is_file():
+        return 0
+    return sum(1 for line in CALL_LOG.read_text(encoding="utf-8").splitlines()
+               if line.strip() and not json.loads(line).get("cached"))
+
+
+def suite_metamorphic(args: argparse.Namespace) -> int:
+    from metamorphic import run_checks
+
+    live_before = _live_calls()
+    checks = run_checks(Path(args.dataset))
+    live = _live_calls() - live_before
+    _write_report(args, "metamorphic", {"suite": "metamorphic", "cases": "samples (32)",
+                                        "live_model_calls": live,
+                                        "checks": [c.__dict__ for c in checks]})
+    print(f"metamorphic (32 sample requests, live model calls during the suite: {live})")
+    for c in checks:
+        print(f"  {'PASS' if c.ok else 'FAIL'} {c.name:20s} {c.detail}"
+              + (f"; rows changed: {', '.join(c.changed)}" if c.changed and c.name != "late_file_vanishes" else ""))
+    return 0 if all(c.ok for c in checks) and live == 0 else 1
 
 
 # ---------------------------------------------------------------- samples
@@ -135,6 +243,7 @@ def suite_coverage(args: argparse.Namespace) -> int:
         "identity": dict(kinds), "zero_observation_cases": zero,
         "observation_histogram": {str(k): v for k, v in sorted(obs_hist.items())},
         "owner_conflicts": conflicts, "per_case": per_case,
+        "single_file_cases": [c["case_id"] for c in per_case if len(c["files"]) == 1],
     })
     dump_path = _out_dir(args) / "coverage_dump.md"
     dump_path.write_text("\n".join(dump) + "\n", encoding="utf-8")
@@ -152,6 +261,10 @@ def suite_coverage(args: argparse.Namespace) -> int:
     print(f"  samples: gold resources linked to the user by identifier "
           f"{sum(r['gold_linked'] for r in sample_rows)}/{sum(r['gold_resources'] for r in sample_rows)}")
     print(f"  eval cases: identity {dict(kinds)}; zero-observation cases {len(zero)}/{len(per_case)}")
+    single = [c["case_id"] for c in per_case if len(c["files"]) == 1]
+    several = [f"{c['case_id']}({len(c['files'])})" for c in per_case if len(c["files"]) > 1]
+    print(f"  eval cases whose subject is observed in exactly one eligible evidence file: {len(single)} "
+          f"(ids in coverage_report.json single_file_cases); in several: {len(several)}: {', '.join(several)}")
     print(f"  resources claimed by more than one user: {len(conflicts)}")
     print(f"  dump: {dump_path}")
     return 0
@@ -360,22 +473,13 @@ def suite_custom(args: argparse.Namespace) -> int:
     return 0 if not failures else 1
 
 
-# ---------------------------------------------------------------- stubs
-
-def _stub(name: str):
-    def run(args: argparse.Namespace) -> int:
-        print(f"suite '{name}' is not implemented yet", file=sys.stderr)
-        return 2
-    return run
-
-
 SUITES = {
     "contract": suite_contract,
     "samples": suite_samples,
     "coverage": suite_coverage,
     "custom": suite_custom,
-    "metamorphic": _stub("metamorphic"),
-    "complete-check": _stub("complete-check"),
+    "metamorphic": suite_metamorphic,
+    "complete-check": suite_complete_check,
 }
 
 
