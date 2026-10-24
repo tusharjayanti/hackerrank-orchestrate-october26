@@ -46,7 +46,9 @@ def facts_for(res: tuple[str, str], table: ObservationTable, cutoff: datetime) -
         # (replica drift), or when no explicit observation exists at all.
         if not explicit_files or c.file_id in explicit_files:
             out.append(_from_coverage(c))
-    return sorted(out, key=lambda f: (f.observed_at, f.file_id, f.detail))
+    # Total order on content (state and category break the last ties), so the
+    # category picked below never depends on parser or manifest order.
+    return sorted(out, key=lambda f: (f.observed_at, f.file_id, f.detail, f.explicit, f.state.value, str(f.category)))
 
 
 def _from_obs(o: Observation) -> Fact:
@@ -68,7 +70,7 @@ def state_at(res: tuple[str, str], table: ObservationTable, audit_at: datetime) 
     for fid, fs in by_file.items():
         latest = max(f.observed_at for f in fs)
         at_latest = [f for f in fs if f.observed_at == latest]
-        best = max(at_latest, key=lambda f: (EXPOSURE[f.state], f.explicit))
+        best = max(at_latest, key=lambda f: (EXPOSURE[f.state], f.explicit, f.state.value, f.detail))
         summaries.append((latest, best.explicit, fid, best))
     # Latest file wins; at equal time an explicit observation beats an omission.
     summaries.sort(key=lambda s: (s[0], s[1], s[2]))

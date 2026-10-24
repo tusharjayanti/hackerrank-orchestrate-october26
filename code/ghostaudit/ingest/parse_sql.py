@@ -78,7 +78,10 @@ def _read(f: EvidenceFile, db: sqlite3.Connection, script: str) -> ParseResult:
         if table == "snapshot_scope":
             continue
         cols = [r[1] for r in db.execute(f'PRAGMA table_info("{table}")')]
-        rows = [dict(zip(cols, r)) for r in db.execute(f'SELECT * FROM "{table}" ORDER BY resource_id')]
+        # Sorted on full content, not only resource_id: a generic table can
+        # hold the same resource twice and SQLite does not promise their order.
+        rows = sorted((dict(zip(cols, r)) for r in db.execute(f'SELECT * FROM "{table}"')),
+                      key=lambda row: (str(row.get("resource_id")), json.dumps(row, sort_keys=True, default=str)))
         if GENERIC_COLUMNS <= set(cols):
             per_system = generic_rids.setdefault(table, {})
             for row in rows:

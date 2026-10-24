@@ -64,6 +64,9 @@ COLLECTION_CATEGORY: dict[str, DataCategory] = {
     # A contact row carrying a marketing opt-in is a marketing profile,
     # whatever service serves it (sample case_12 deletes analytics_9914).
     "marketing_contact": DataCategory.MARKETING_PROFILE,
+    # Orders kept for payment disputes and tax: rule_13 (RETAIN while the
+    # hold is active), verified PRESENT like audit records.
+    "retained_order_records": DataCategory.LEGAL_HOLD_RECORD,
 }
 
 # Fields that carry a direct identifier (prohibited after REDACT/ANONYMIZE).
@@ -85,6 +88,10 @@ FREE_TEXT_KEYS = frozenset({"message_text", "message_excerpt"})
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE = re.compile(r"\+\d[\d\s().-]{6,}\d")
+# Retention dates: a field of its own, or "retain until <date>" in free text.
+RETENTION_KEYS = ("retention_until", "retained_until", "retain_until")
+_RETAIN_TEXT = re.compile(r"retain(?:ed)?\s+until\s*:?\s*(\d{4}-\d\d-\d\d(?:[T ]\d\d:\d\d(?::\d\d)?Z?)?)",
+                          re.IGNORECASE)
 _NULLS = {None, "", "null", "none", "None", "NULL", "[REDACTED]"}
 
 DEIDENTIFIED_STATE: dict[DataCategory, ObservedState] = {
@@ -177,6 +184,35 @@ def identifiers_in(record: dict) -> tuple[list[str], bool]:
     return sorted(set(ids)), direct
 
 
+def _parse_date(value: str) -> datetime | None:
+    v = value.strip().replace(" ", "T")
+    if len(v) == 10:
+        v += "T00:00:00"
+    if not v.endswith("Z") and "+" not in v[10:]:
+        v += "Z"
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def retain_until_in(record: dict) -> datetime | None:
+    """The date until which a retained record may be kept, when the record
+    states one. Several statements in one record: the earliest binds."""
+    found = []
+    for k in RETENTION_KEYS:
+        if present(record.get(k)):
+            d = _parse_date(str(record[k]))
+            if d is None:
+                log.warning("retention_date_unparsed", key=k)
+            else:
+                found.append(d)
+    for k, v in sorted(record.items()):
+        if isinstance(v, str) and k not in RETENTION_KEYS:
+            found.extend(d for d in (_parse_date(m) for m in _RETAIN_TEXT.findall(v)) if d is not None)
+    return min(found) if found else None
+
+
 def _looks_linkable(value: str) -> bool:
     n = normalize_identifier(value)
     return n.isdigit() or (len(n) == 64 and all(c in "0123456789abcdef" for c in n))
@@ -226,6 +262,7 @@ def observe_record(f: EvidenceFile, observed_at: datetime, record: dict, *, syst
         file_id=f.file_id, captured_at=f.captured_at, observed_at=observed_at,
         system_id=system, resource_id=rid, data_category=category, state=state,
         identifiers=tuple(ids), source_detail=source_detail, vision=False,
+        retain_until=retain_until_in(flat),
     )
 
 
@@ -267,13 +304,17 @@ class FileStats:
 class ObservationTable:
     def __init__(self, observations: list[Observation], coverage: list[Coverage], stats: list[FileStats],
                  identity: IdentityIndex):
-        key = lambda o: (o.observed_at, o.file_id, o.system_id, o.resource_id, o.source_detail)  # noqa: E731
+        # A total order on content, so neither manifest nor parser order can
+        # leak into which observation is seen first.
+        key = lambda o: (o.observed_at, o.file_id, o.system_id, o.resource_id, o.source_detail,  # noqa: E731
+                         o.state.value, str(o.data_category), o.identifiers, str(o.retain_until))
         # vision_only rows (a screenshot id nothing else knows) are held out of
         # state and linking until the agent re-reads the file.
         self.held = sorted((o for o in observations if o.source_detail.endswith(":vision_only")), key=key)
         self.observations = sorted((o for o in observations if not o.source_detail.endswith(":vision_only")),
                                    key=key)
-        self.coverage = sorted(coverage, key=lambda c: (c.observed_at, c.file_id, c.source_detail))
+        self.coverage = sorted(coverage, key=lambda c: (c.observed_at, c.file_id, c.source_detail, c.system_id,
+                                                        sorted(c.resource_ids)))
         self.stats = stats
         self.identity = identity
         self.by_resource: dict[tuple[str, str], list[Observation]] = defaultdict(list)
@@ -286,6 +327,10 @@ class ObservationTable:
 
     def owners(self, o: Observation) -> set[str]:
         return {u for u in (self.identity.owner_of(i) for i in o.identifiers) if u}
+
+    def eligible(self, res: tuple[str, str], audit_at: datetime) -> list[Observation]:
+        """Observations of one resource from evidence captured at or before audit_at."""
+        return [o for o in self.by_resource.get(res, ()) if o.captured_at <= audit_at]
 
     def held_for_user(self, user_id: str, audit_at: datetime) -> list[Observation]:
         return [o for o in self.held if o.captured_at <= audit_at and user_id in self.owners(o)]
