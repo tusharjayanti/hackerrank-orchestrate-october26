@@ -230,3 +230,11 @@ repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T19:46:54Z] Correction: Track B SESSION START timestamp
+
+The Track B (guards worktree) SESSION START entry above with timestamp 2026-10-25T00:00:00Z was written with a placeholder; the session actually started at 2026-10-24T18:55:36Z. Fixed forward; the earlier entry is unchanged.
+
+## [2026-10-24T19:46:54Z] Note: Track A saw the case_04 sample answer
+
+While debugging, Track A (agent worktree) saw case_04's row in dataset/sample_output.csv. That file is participant data the samples suite scores against; no candidate or prompt was shaped by it.
+

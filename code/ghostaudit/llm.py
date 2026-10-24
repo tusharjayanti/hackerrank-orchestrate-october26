@@ -65,6 +65,22 @@ def credentials_present() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
+def replay_cache_present() -> bool:
+    """A populated answer cache can be replayed without credentials."""
+    return CACHE_DIR.is_dir() and any(CACHE_DIR.glob("*.json"))
+
+
+def model_access() -> str:
+    """live: credentials present (cache hits still replay, misses call the
+    API); replay: no credentials but a cache, so only cached answers are used
+    and a miss degrades with a flag; none: offline or nothing to replay."""
+    if os.environ.get("GHOSTAUDIT_OFFLINE") == "1":
+        return "none"
+    if credentials_present():
+        return "live"
+    return "replay" if replay_cache_present() else "none"
+
+
 def image_block(path: Path, media_type: str) -> dict:
     data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
     kind = "document" if media_type == "application/pdf" else "image"
@@ -179,4 +195,4 @@ class LLM:
             f.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-__all__ = ["LLM", "LLMUnavailable", "LLMExtractionFailed", "BudgetExceeded", "credentials_present", "image_block", "MODEL", "SONNET", "model_for"]
+__all__ = ["LLM", "LLMUnavailable", "LLMExtractionFailed", "BudgetExceeded", "credentials_present", "image_block", "MODEL", "SONNET", "model_for", "model_access"]

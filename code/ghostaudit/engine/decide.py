@@ -14,7 +14,7 @@ from ..ingest.manifest import Manifest, parse_ts
 from ..ingest.observations import ObservationTable, build_table, category_for
 from ..intent import Classified
 from ..linking import CaseContext, Linker
-from ..llm import LLM, credentials_present
+from ..llm import LLM, model_access
 from ..obs import get_logger
 from ..schemas import DataCategory, Decision, DeletionStatus, Flag, FlagSet, LinkLayer, RequiredAction
 from .policy import Scoped, load_rules, policy_diff, retention_expired, shared_attachment
@@ -40,9 +40,10 @@ class World:
         identity = IdentityIndex.load(dataset_dir)
         manifest = Manifest.load(dataset_dir)
         activity = Activity.load(dataset_dir)
-        # Screenshots need the model; without credentials they are deferred
-        # and the run is engine-only for them (PDFs are read without a model).
-        llm = LLM(run_id=run_id) if credentials_present() else None
+        # live: model calls allowed; replay: cached answers only (a miss is
+        # flagged, never called); none: offline, screenshots deferred (PDFs
+        # and every text format are read without a model either way).
+        llm = LLM(run_id=run_id) if model_access() != "none" else None
         table = build_table(manifest, identity, formats, activity=activity, llm=llm)
         linker = Linker(table, activity)
         # Layers 5-6 eliminate across cases, so they are solved once over every

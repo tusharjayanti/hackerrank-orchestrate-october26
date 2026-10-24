@@ -23,7 +23,7 @@ from .. import llm as llm_mod
 from ..budget import BudgetExceeded
 from ..llm import LLMUnavailable, image_block, model_for
 from ..obs import get_logger
-from ..schemas import Decision, DeletionStatus, Flag, FlagSet, LinkLayer, Step
+from ..schemas import Decision, DeletionStatus, Flag, FlagSet, LinkLayer, ObservedState, Step
 from . import prompts
 from .candidates import ENGINE_DEFAULT, Candidate, generate_candidates, needs_agent
 from .tools import ALLOWED, Session, run_tool, tool_specs
@@ -42,7 +42,8 @@ SUMMARY_CHARS = 240
 def agent_trace(**kw) -> dict:
     """trace["agent"], recorded for every case whether or not the agent ran."""
     base = {"gated": False, "reasons": [], "ran": False, "turns": 0, "tool_calls": [], "candidates": [],
-            "chosen": None, "outcome": "not_gated", "model": None, "cached": False}
+            "inadmissible": [], "chosen": None, "outcome": "not_gated", "model": None, "cached": False,
+            "observations": []}
     base.update(kw)
     return base
 
@@ -86,7 +87,7 @@ def run_agent(world: World, request: dict, trace: dict, reasons: list[str], cand
     """The manual tool-use loop for one gated case. Never raises."""
     llm = world.llm
     model = model_for("AGENT")
-    session = Session(request=request, trace=trace, candidates=candidates)
+    session = Session(request=request, trace=trace, candidates=candidates, world=world)
     first = prompts.case_message(request, reasons, [{**c.summary(), "steps_json": c.steps_json}
                                                      for c in candidates])
     cache = _cache_path(model, first)
@@ -94,6 +95,8 @@ def run_agent(world: World, request: dict, trace: dict, reasons: list[str], cand
     if cache.is_file():
         hit = json.loads(cache.read_text(encoding="utf-8"))
         chosen = next((c for c in candidates if c.id == hit["chosen"]), None)
+        if chosen is None and hit.get("observation"):
+            chosen = _replay_agent_candidate(world, request, trace, candidates, hit["observation"])
         if chosen is not None:
             llm._log({**base_row, "model": hit["model"], "cached": True, "input_tokens": 0, "output_tokens": 0,
                       "usd": 0.0, "cache_key": cache.stem})
@@ -157,13 +160,32 @@ def run_agent(world: World, request: dict, trace: dict, reasons: list[str], cand
         if session.accepted is not None:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps({"chosen": session.accepted.id, "turns": turn, "tool_calls": calls,
-                                         "model": served_by}, sort_keys=True, indent=1), encoding="utf-8")
+                                         "model": served_by,
+                                         "observation": (session.accepted.observations or [None])[0]},
+                                        sort_keys=True, indent=1), encoding="utf-8")
             return AgentResult("accepted", session.accepted, turn, calls, model=served_by)
         if repair:
             results.append({"type": "text", "text": repair})
         messages.append({"role": "user", "content": results})
     return AgentResult("max_turns", None, MAX_TURNS, calls, f"no accepted submission in {MAX_TURNS} turns",
                        served_by)
+
+
+def _replay_agent_candidate(world: World, request: dict, trace: dict, candidates: list[Candidate],
+                            stored: dict) -> Candidate | None:
+    """Rebuild an agent-built candidate from the cache by re-running the same
+    verification and engine path (the cache never vouches for evidence)."""
+    from .candidates import build_with_observation, inadmissible
+    from .tools import ToolError, verified_observation
+
+    uid = (trace.get("identity") or {}).get("user_id")
+    try:
+        obs = verified_observation(world, request, uid, stored["system_id"], stored["resource_id"],
+                                   ObservedState(stored["state"]), stored["file_id"])
+    except (ToolError, KeyError, ValueError):
+        return None
+    cand = build_with_observation(world, request, trace, obs)
+    return cand if inadmissible(cand, candidates[0]) is None else None
 
 
 _OUTCOME_FLAG = {"unavailable": Flag.AGENT_UNAVAILABLE, "rejected_submission": Flag.AGENT_REJECTED_SUBMISSION,
@@ -185,12 +207,15 @@ def review_case(world: World, request: dict, max_layer: LinkLayer, status: Delet
         flags.add(Flag.AGENT_UNAVAILABLE, "no model")
         trace["agent"] = agent_trace(gated=True, reasons=reasons, outcome="unavailable")
         return status, steps
-    candidates = generate_candidates(world, request, engine, trace, max_layer)
+    dropped: list[dict] = []
+    candidates = generate_candidates(world, request, engine, trace, max_layer, dropped)
     flags.add(Flag.AGENT_INVOKED, "; ".join(r.split(":", 1)[0] for r in reasons))
     result = run_agent(world, request, trace, reasons, candidates, client)
     trace["agent"] = agent_trace(
         gated=True, reasons=reasons, ran=True, turns=result.turns, tool_calls=result.tool_calls,
-        candidates=[c.summary() for c in candidates], chosen=result.chosen.id if result.chosen else None,
+        candidates=[c.summary() for c in candidates], inadmissible=dropped,
+        chosen=result.chosen.id if result.chosen else None,
+        observations=list(result.chosen.observations) if result.chosen else [],
         outcome=result.outcome, detail=result.detail, model=result.model, cached=result.cached)
     if result.outcome in _OUTCOME_FLAG:
         flags.add(_OUTCOME_FLAG[result.outcome], result.detail)

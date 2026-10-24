@@ -31,7 +31,7 @@ from ghostaudit.engine.decide import World, decide_case  # noqa: E402
 from ghostaudit.guards import GuardContext, cross_row_check, guard_decision, sample_mix  # noqa: E402
 from ghostaudit.ingest.manifest import CitationRegistry  # noqa: E402
 from ghostaudit.intent import classify  # noqa: E402
-from ghostaudit.llm import CALL_LOG, model_for  # noqa: E402
+from ghostaudit.llm import CALL_LOG, model_access, model_for  # noqa: E402
 from ghostaudit.obs import get_logger  # noqa: E402
 from ghostaudit.schemas import (  # noqa: E402
     OUTPUT_HEADER,
@@ -157,7 +157,9 @@ def main(argv: list[str] | None = None) -> int:
         "cross_row": cross_row,
         "flags": dict(sorted(flags.items())),
         "models": {stage: model_for(stage) for stage in ("VISION", "INTENT", "AGENT")},
-        "model_access": world.llm is not None,
+        "model_access": model_access(),
+        "budget": {"max_calls": world.llm.budget.max_calls, "max_usd": world.llm.budget.max_usd,
+                   "tripped": world.llm.budget.tripped} if world.llm else None,
         "usage": usage_for(run_id),
     }
     (run_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n",

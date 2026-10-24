@@ -305,7 +305,24 @@ def observes(table, file_id: str, res: Res, absent_claim: bool) -> bool:
                                 for c in table.coverage)
 
 
-def citation_issues(case_id: str, steps: list[dict], audit_at: datetime, world) -> list[Issue]:
+def table_with_agent(world, trace: dict | None):
+    """The observation table, plus any record the agent verified for this
+    case (resource id present in an eligible file with one of the subject's
+    identifiers; agent/tools.verified_observation). Agent records exist only
+    for the case that found them."""
+    extra = ((trace or {}).get("agent") or {}).get("observations") or []
+    if not extra:
+        return world.table
+    from .ingest.observations import ObservationTable
+    from .schemas import Observation
+
+    t = world.table
+    return ObservationTable(t.observations + [Observation.model_validate(o) for o in extra], t.coverage, t.stats,
+                            t.identity)
+
+
+def citation_issues(case_id: str, steps: list[dict], audit_at: datetime, world, table=None) -> list[Issue]:
+    table = table if table is not None else world.table
     issues = []
     for s in steps:
         eid = s["evidence_id"]
@@ -317,20 +334,21 @@ def citation_issues(case_id: str, steps: list[dict], audit_at: datetime, world) 
             issues.append(Issue("citation_not_evidence_file", case_id, f"step {s['step_no']} cites {eid}"))
         elif f.captured_at > audit_at:
             issues.append(Issue("citation_after_audit", case_id, f"step {s['step_no']} cites {eid}"))
-        elif not observes(world.table, eid, res, s["state"] == "ABSENT" and s["phase"] == Phase.VERIFICATION):
+        elif not observes(table, eid, res, s["state"] == "ABSENT" and s["phase"] == Phase.VERIFICATION):
             issues.append(Issue("citation_does_not_observe", case_id,
                                 f"step {s['step_no']} cites {eid}, which does not observe {res[0]}/{res[1]}"))
     return issues
 
 
-def rederive(steps: list[dict], audit_at: datetime, world) -> tuple[DeletionStatus, list[Step]]:
+def rederive(steps: list[dict], audit_at: datetime, world, table=None) -> tuple[DeletionStatus, list[Step]]:
     """The row the engine's own state and policy rules produce from the
     row's cited files alone. Resources the row cites nothing for keep their
     verification steps as future checks (they only exist in INCOMPLETE rows,
     where they make no evidence claim)."""
     resources = sorted({(s["system_id"], s["resource_id"]) for s in steps})
     cited = {s["evidence_id"] for s in steps if s["evidence_id"]}
-    view = _CitedView(world.table, cited, audit_at, resources)
+    table = table if table is not None else world.table
+    view = _CitedView(table, cited, audit_at, resources)
     scoped, kept = [], []
     for res in resources:
         mine = [s for s in steps if (s["system_id"], s["resource_id"]) == res]
@@ -341,7 +359,7 @@ def rederive(steps: list[dict], audit_at: datetime, world) -> tuple[DeletionStat
         st = state_at(res, view, audit_at)
         # The category is a property of the resource, not a state claim: when
         # the cited file does not name it, take it as the engine does.
-        full = state_at(res, world.table, audit_at)
+        full = state_at(res, table, audit_at)
         category = ((st.data_category if st else None) or (full.data_category if full else None)
                     or category_for(res[0]))
         obs = view.cited_observations(res, audit_at)
@@ -356,12 +374,12 @@ def _canon(steps: list[dict]) -> list[str]:
     return [json.dumps(s, sort_keys=True) for s in steps]
 
 
-def complete_check(case_id: str, steps: list[dict], audit_at: datetime, world
+def complete_check(case_id: str, steps: list[dict], audit_at: datetime, world, table=None
                    ) -> tuple[list[Issue], DeletionStatus, list[Step]]:
     """Re-derive a COMPLETE row from its cited evidence alone. Returns the
     issues, and the re-derived status and steps (the downgrade, when the
     cited evidence shows a violation)."""
-    status, derived = rederive(steps, audit_at, world)
+    status, derived = rederive(steps, audit_at, world, table)
     got = json.loads(serialize_steps(derived))
     if status is DeletionStatus.COMPLETE and _canon(got) == _canon(steps):
         return [], status, derived
@@ -418,7 +436,7 @@ def row_issues(d: Decision, trace: dict | None, audit_at: datetime, ctx: GuardCo
     issues = check_row(d.case_id, row["deletion_status"], row["steps_json"], audit_at, ctx.registry)
     steps = json.loads(row["steps_json"])
     if d.status is not DeletionStatus.NOT_APPLICABLE:
-        issues += citation_issues(d.case_id, steps, audit_at, ctx.world)
+        issues += citation_issues(d.case_id, steps, audit_at, ctx.world, table_with_agent(ctx.world, trace))
         issues += policy_issues(d.case_id, steps, categories_from_trace(trace))
     return issues
 
@@ -427,7 +445,8 @@ def _guard_once(d: Decision, trace: dict | None, audit_at: datetime, ctx: GuardC
                 ) -> tuple[Decision, list[Issue]]:
     if d.status is DeletionStatus.COMPLETE and d.steps:
         steps = json.loads(d.to_row()["steps_json"])
-        refuted, status, derived = complete_check(d.case_id, steps, audit_at, ctx.world)
+        refuted, status, derived = complete_check(d.case_id, steps, audit_at, ctx.world,
+                                                  table_with_agent(ctx.world, trace))
         if refuted:
             report["complete_check"] = [i.detail for i in refuted]
             if status is not DeletionStatus.INCOMPLETE:

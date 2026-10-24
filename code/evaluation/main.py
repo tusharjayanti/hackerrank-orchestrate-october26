@@ -37,7 +37,7 @@ from ghostaudit.intent import classify  # noqa: E402
 from ghostaudit.engine.state import out_of_scope  # noqa: E402
 from ghostaudit.ingest.activity import Activity  # noqa: E402
 from ghostaudit.ingest.observations import build_table  # noqa: E402
-from ghostaudit.llm import LLM, credentials_present  # noqa: E402
+from ghostaudit.llm import LLM, model_access  # noqa: E402
 from ghostaudit.schemas import LinkLayer, case_sort_key  # noqa: E402
 from scoring import STATUSES, read_output, render_dump, score  # noqa: E402
 
@@ -206,7 +206,7 @@ def _world(args: argparse.Namespace):
     dataset = Path(args.dataset)
     identity = IdentityIndex.load(dataset)
     manifest = Manifest.load(dataset)
-    llm = LLM() if credentials_present() else None
+    llm = LLM() if model_access() != "none" else None
     table = build_table(manifest, identity, _formats(args), activity=Activity.load(dataset), llm=llm)
     return identity, manifest, table
 

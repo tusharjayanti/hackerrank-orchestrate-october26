@@ -9,12 +9,19 @@ engine cannot settle from its own evidence:
 
 Candidates are complete decisions the engine generated for the case under
 explicit, named variations of its own inputs. The agent picks one by id; it
-never writes a resource id or a step. Every candidate goes through the same
-state_at -> policy_diff -> build_steps path as the engine default.
+never writes a step. Every candidate goes through the same state_at ->
+policy_diff -> build_steps path as the engine default.
+
+The action space is monotone toward caution: a candidate is admissible only
+if it keeps every finding of the engine default, never turns an INCOMPLETE
+default into COMPLETE, and never drops a resource the default covers. The
+agent can make an audit stricter, never looser. (Measured: before this rule
+the agent chose a less safe reading on 4 cases and the guards reverted all 4.)
 """
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
@@ -25,7 +32,7 @@ from ..engine.steps import build_steps
 from ..ingest.manifest import parse_ts
 from ..ingest.observations import ObservationTable, category_for
 from ..linking import Linker
-from ..schemas import Decision, LinkLayer, Observation, ObservedState, ResourceState, serialize_steps
+from ..schemas import EXPOSURE, Decision, LinkLayer, Observation, ObservedState, ResourceState, serialize_steps
 
 if TYPE_CHECKING:
     from ..engine.decide import World
@@ -40,10 +47,35 @@ class Candidate:
     description: str
     status: str
     steps_json: str
+    # Agent-verified observations this candidate relies on (apply_policy).
+    observations: tuple[dict, ...] = ()
 
     def summary(self) -> dict:
         return {"id": self.id, "description": self.description, "status": self.status,
                 "steps": self.steps_json.count('"step_no"')}
+
+
+def _findings(steps_json: str) -> set[tuple[str, str, str]]:
+    return {(s["operation"], s["system_id"], s["resource_id"]) for s in json.loads(steps_json)
+            if s["phase"] == "FINDING"}
+
+
+def _resources(steps_json: str) -> set[tuple[str, str]]:
+    return {(s["system_id"], s["resource_id"]) for s in json.loads(steps_json)}
+
+
+def inadmissible(candidate: Candidate, default: Candidate) -> str | None:
+    """Why a candidate would make the audit looser than the engine default,
+    or None if it is admissible."""
+    if default.status == "INCOMPLETE" and candidate.status == "COMPLETE":
+        return "turns the engine's INCOMPLETE into COMPLETE"
+    lost = _findings(default.steps_json) - _findings(candidate.steps_json)
+    if lost:
+        return "drops findings " + ", ".join(f"{op} {sy}/{r}" for op, sy, r in sorted(lost))
+    dropped = _resources(default.steps_json) - _resources(candidate.steps_json)
+    if dropped:
+        return "drops resources " + ", ".join(f"{sy}/{r}" for sy, r in sorted(dropped))
+    return None
 
 
 def _uid(trace: dict) -> str | None:
@@ -145,27 +177,12 @@ def _via_engine(world: World, request: dict, max_layer: LinkLayer) -> tuple[str,
     return d.status.value, serialize_steps(list(d.steps))
 
 
-def _all_links_in_scope(world: World, request: dict, max_layer: LinkLayer) -> tuple[str, str]:
-    """The engine pipeline with the scope rule switched off: every linked
-    resource is judged, including ones last seen before requested_at."""
-    from ..engine.decide import case_context
-
-    audit_at = parse_ts(request["audit_at"])
-    links = world.linker.links(case_context(world.identity, request), max_layer)
-    resources = []
-    for res in sorted(links):
-        st = state_at(res, world.table, audit_at)
-        category = st.data_category if st and st.data_category else category_for(res[0])
-        resources.append((res[0], res[1], category, st))
-    status, steps = build_steps(policy_diff(resources, world.rules)[0])
-    return status.value, serialize_steps(steps)
-
-
 def generate_candidates(world: World, request: dict, decision: Decision, trace: dict,
-                        max_layer: LinkLayer) -> list[Candidate]:
-    """Engine decisions for the case under each applicable variation,
-    deduplicated on (status, steps_json), engine default first and the rest
-    sorted by id."""
+                        max_layer: LinkLayer, dropped: list[dict] | None = None) -> list[Candidate]:
+    """Admissible engine decisions for the case under each applicable
+    variation, deduplicated on (status, steps_json), engine default first and
+    the rest sorted by id. Inadmissible variations are left out and, when
+    `dropped` is given, recorded there with the reason."""
     uid = _uid(trace)
     audit_at = parse_ts(request["audit_at"])
     raw: list[tuple[str, str, tuple[str, str]]] = [
@@ -192,7 +209,10 @@ def generate_candidates(world: World, request: dict, decision: Decision, trace: 
 
     for (system, rid), clash in sorted(captured_conflicts(world, scoped_resources(trace), audit_at).items()):
         for at, states in sorted(clash.items()):
-            for keep in states:
+            # Unresolved conflict: only the safer (more exposed) reading is
+            # offered; the less safe one would loosen the audit.
+            safer = max(states, key=lambda st: (EXPOSURE[ObservedState(st)], st))
+            for keep in [safer]:
                 def side(system=system, rid=rid, at=at, keep=keep):
                     obs = [o for o in world.table.observations
                            if not ((o.system_id, o.resource_id) == (system, rid) and o.captured_at == at
@@ -203,16 +223,9 @@ def generate_candidates(world: World, request: dict, decision: Decision, trace: 
                 add(f"conflict:{system}/{rid}@{at.strftime('%Y%m%dT%H%M')}:{keep}",
                     f"{system}/{rid} taken as {keep} in the evidence captured at {at.isoformat()}", side)
 
-    add("all_links_in_scope", "scope rule off: every linked resource is judged, including ones last seen "
-        "before requested_at", lambda: _all_links_in_scope(world, request, max_layer))
-    if max_layer >= LinkLayer.PROXIMITY:
-        add("fact_links_only", "only evidence and catalog links (layers 1-4); no inferred proximity or sibling "
-            "links", lambda: _via_engine(_engine_only(world), request, LinkLayer.VISION))
-    if max_layer >= LinkLayer.SIBLING and not world.linker.enable_sibling:
-        add("with_sibling_links", "layer 6 on: the sole free analytics anonymization in the account deletion's "
-            "worker run is linked", lambda: _via_engine(
-                _engine_only(world, linker=_linker_over(world, world.table, enable_sibling=True)), request,
-                max_layer))
+    # No candidate switches a measured rule off (scope rule, L5 links) or a
+    # rejected one on (L6 sibling links, 1/3 on the samples): the agent adds
+    # evidence or takes the safer side of a conflict, nothing else.
 
     seen: dict[tuple[str, str], int] = {}
     out: list[Candidate] = []
@@ -223,4 +236,34 @@ def generate_candidates(world: World, request: dict, decision: Decision, trace: 
             continue
         seen[key] = len(out)
         out.append(Candidate(cid, desc, key[0], key[1]))
-    return [out[0]] + sorted(out[1:], key=lambda c: c.id)
+    default, kept = out[0], []
+    for c in sorted(out[1:], key=lambda c: c.id):
+        why = inadmissible(c, default)
+        if why is None:
+            kept.append(c)
+        elif dropped is not None:
+            dropped.append({"id": c.id, "reason": why})
+    return [default] + kept
+
+
+def build_with_observation(world: World, request: dict, trace: dict, obs: Observation) -> Candidate:
+    """The engine decision for the case with one agent-verified record added
+    (the record replaces nothing the engine already knows: it is judged with
+    the same state -> policy -> steps path, citing the file it came from)."""
+    audit_at = parse_ts(request["audit_at"])
+    res = (obs.system_id, obs.resource_id)
+    resources = []
+    for r in scoped_resources(trace):
+        if r == res:
+            continue
+        st = state_at(r, world.table, audit_at)
+        category = st.data_category if st and st.data_category else category_for(r[0])
+        resources.append((r[0], r[1], category, st))
+    st = ResourceState(system_id=obs.system_id, resource_id=obs.resource_id, data_category=obs.data_category,
+                       state=obs.state, evidence_id=obs.file_id, as_of=obs.observed_at)
+    resources.append((obs.system_id, obs.resource_id, obs.data_category, st))
+    status, steps = build_steps(policy_diff(sorted(resources, key=lambda x: (x[0], x[1])), world.rules)[0])
+    return Candidate(f"agent_observation:{obs.system_id}/{obs.resource_id}:{obs.state.value}",
+                     f"engine decision with {obs.system_id}/{obs.resource_id} {obs.state.value} as read in "
+                     f"{obs.file_id} (a record the parsers did not extract)", status.value, serialize_steps(steps),
+                     (obs.model_dump(mode="json"),))

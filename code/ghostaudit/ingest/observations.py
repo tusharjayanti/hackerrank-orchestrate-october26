@@ -374,9 +374,13 @@ def build_table(manifest: Manifest, identity: IdentityIndex, formats: set[str] |
     coverage: list[Coverage] = []
     stats: list[FileStats] = []
 
+    from ..llm import LLMUnavailable
+
     def run(f: EvidenceFile, parser) -> None:
         try:
             res = parser(f)
+        except LLMUnavailable:
+            raise  # not a parse failure: the caller records the file as deferred
         except Exception as e:  # noqa: BLE001 - one bad file must not sink the run
             log.error("parse_failed", file_id=f.file_id, path=f.rel_path, error=repr(e))
             stats.append(FileStats(f.file_id, f.format, "failed", notes=[repr(e)]))
@@ -398,7 +402,6 @@ def build_table(manifest: Manifest, identity: IdentityIndex, formats: set[str] |
         run(f, parser)
 
     from . import parse_vision
-    from ..llm import LLMUnavailable
 
     known = {o.resource_id for o in observations}
     labels: dict[str, str] = {}

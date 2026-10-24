@@ -2,9 +2,13 @@
 
 The agent runs only on gated cases. It can read and search evidence that was
 available at the case's audit_at, and it can ask the policy engine what a
-state means. It never writes a resource id or a step: the engine generates
-candidate decisions for the case (agent/candidates.py), and submit_decision
-accepts only one of those candidates, by id.
+state means. It never writes a step: the engine generates candidate
+decisions for the case (agent/candidates.py), and submit_decision accepts
+only one of those candidates, by id. The one way the agent adds a candidate
+is apply_policy on a record the parsers missed: the resource id must appear
+in an eligible file it read, together with one of the subject's identifiers,
+and the resulting engine decision must be at least as strict as the
+engine default. The agent can make the audit stricter, never looser.
 
 Every input model is strict (no type coercion) and forbids extra fields; the
 same models produce the JSON schemas sent to the model with strict: true.
@@ -85,6 +89,7 @@ class Session:
     candidates: list[Candidate]
     accepted: Candidate | None = None
     rejections: list[str] = field(default_factory=list)
+    world: World | None = None
 
     @property
     def case_id(self) -> str:
@@ -146,6 +151,14 @@ def list_observations(world: World, inp: ListObservationsInput, session: Session
     return out
 
 
+def _file_text(f) -> str:
+    if f.format == "pdf":
+        import pypdf
+
+        return "\n".join(p.extract_text() or "" for p in pypdf.PdfReader(str(f.path)).pages)
+    return f.path.read_text(encoding="utf-8")
+
+
 def read_evidence_file(world: World, inp: ReadEvidenceFileInput, session: Session | None = None) -> dict:
     """The raw content of one evidence file that existed at audit_at.
 
@@ -160,12 +173,7 @@ def read_evidence_file(world: World, inp: ReadEvidenceFileInput, session: Sessio
     if f.format == "png":
         return {"file_id": f.file_id, "format": "png", "captured_at": f.captured_at.isoformat(),
                 "image_path": str(f.path)}
-    if f.format == "pdf":
-        import pypdf
-
-        text = "\n".join(p.extract_text() or "" for p in pypdf.PdfReader(str(f.path)).pages)
-    else:
-        text = f.path.read_text(encoding="utf-8")
+    text = _file_text(f)
     return {"file_id": f.file_id, "format": f.format, "captured_at": f.captured_at.isoformat(),
             "truncated": len(text) > MAX_FILE_CHARS, "content": text[:MAX_FILE_CHARS]}
 
@@ -217,15 +225,23 @@ def _line_identifiers(line: str) -> set[str]:
 
 
 def apply_policy(world: World, inp: ApplyPolicyInput, session: Session | None = None) -> dict:
-    """What deletion_rules.csv requires for a resource in a given state.
+    """What deletion_rules.csv requires for a resource in a given state, and,
+    inside an investigation, a stricter candidate built from that record.
 
     Input: case_id, system_id, resource_id, observed_state, evidence_id.
     Output: the data category, the finding (or none if compliant), the
-    remediation, and the verification the engine would emit.
-    May decide: nothing; it reports the rule. May not: accept evidence
-    captured after audit_at or a state the policy table does not cover.
+    remediation and verification the engine would emit; inside an
+    investigation also `candidate` (id, status) when the record yields an
+    admissible decision different from the engine default, or `not_offered`
+    with the reason.
+    May decide: which record it read in an eligible file to put before the
+    engine. May not: name a resource id that does not appear in that file,
+    use a file without one of the subject's identifiers, use a screenshot or
+    a file captured after audit_at, or loosen the engine's decision (fewer
+    findings, fewer resources, or COMPLETE where the engine said INCOMPLETE).
     """
-    _eligible(world, _request(world, inp.case_id, session), inp.evidence_id)
+    req = _request(world, inp.case_id, session)
+    _eligible(world, req, inp.evidence_id)
     category: DataCategory | None = category_for(inp.system_id)
     state = ResourceState(system_id=inp.system_id, resource_id=inp.resource_id, data_category=category,
                           state=inp.observed_state, evidence_id=inp.evidence_id,
@@ -233,8 +249,62 @@ def apply_policy(world: World, inp: ApplyPolicyInput, session: Session | None = 
     t = treat(inp.system_id, inp.resource_id, category, state, world.rules)
     if t is None:
         raise ToolError(f"policy does not cover {category} in state {inp.observed_state}")
-    return {"category": str(category), "finding": t.finding, "remediation": t.remediation,
-            "verification": t.verification}
+    out = {"category": str(category), "finding": t.finding, "remediation": t.remediation,
+           "verification": t.verification}
+    if session is not None:
+        out.update(_offer_candidate(world, req, inp, session))
+    return out
+
+
+def verified_observation(world: World, req: dict, uid: str, system_id: str, resource_id: str,
+                         state: ObservedState, evidence_id: str):
+    """An Observation for a record the parsers missed, or a ToolError saying
+    why the claim is not grounded in the file."""
+    from ..ingest.observations import system_for
+    from ..schemas import Observation
+
+    f = world.manifest.by_id[evidence_id]
+    if f.format == "png":
+        raise ToolError("screenshots are read twice by the vision stage; cite a text, log, SQL or PDF file")
+    if system_for(resource_id) != system_id:
+        raise ToolError(f"{resource_id} does not belong to {system_id}")
+    text = _file_text(f)
+    if not re.search(rf"\b{re.escape(resource_id)}\b", text):
+        raise ToolError(f"{resource_id} does not appear in {evidence_id}")
+    subject = world.identity.users.get(uid)
+    mine = sorted(subject.identifiers()) if subject else []
+    present = sorted(i for i in mine if i in _text_identifiers(text))
+    if not present:
+        raise ToolError(f"{evidence_id} shows none of the subject's identifiers, so it cannot tie "
+                        f"{resource_id} to this person")
+    return Observation(file_id=f.file_id, captured_at=f.captured_at, observed_at=f.captured_at, system_id=system_id,
+                       resource_id=resource_id, data_category=category_for(system_id), state=state,
+                       identifiers=tuple(present), source_detail="agent:apply_policy", vision=False)
+
+
+def _text_identifiers(text: str) -> set[str]:
+    out: set[str] = set()
+    for line in text.splitlines():
+        out |= _line_identifiers(line)
+    return out
+
+
+def _offer_candidate(world: World, req: dict, inp: ApplyPolicyInput, session: Session) -> dict:
+    from .candidates import build_with_observation, inadmissible
+
+    uid = (session.trace.get("identity") or {}).get("user_id")
+    obs = verified_observation(world, req, uid, inp.system_id, inp.resource_id, inp.observed_state,
+                               inp.evidence_id)
+    cand = build_with_observation(world, req, session.trace, obs)
+    default = session.candidates[0]
+    if (cand.status, cand.steps_json) == (default.status, default.steps_json):
+        return {"not_offered": "the engine default already gives this decision"}
+    why = inadmissible(cand, default)
+    if why is not None:
+        return {"not_offered": f"not admissible: {why}"}
+    if all(c.id != cand.id for c in session.candidates):
+        session.candidates.append(cand)
+    return {"candidate": {"id": cand.id, "status": cand.status, "description": cand.description}}
 
 
 def submit_decision(world: World, inp: SubmitDecisionInput, session: Session | None = None) -> dict:
@@ -256,6 +326,11 @@ def submit_decision(world: World, inp: SubmitDecisionInput, session: Session | N
     if cand is None:
         raise ToolError(f"{inp.candidate_id!r} is not a candidate for {session.case_id}; "
                         f"valid ids: {sorted(by_id)}")
+    from .candidates import inadmissible
+
+    why = inadmissible(cand, session.candidates[0]) if cand is not session.candidates[0] else None
+    if why is not None:
+        raise ToolError(f"{cand.id} is not admissible: it {why}; the agent may only make the audit stricter")
     if inp.steps_json is not None and inp.steps_json != cand.steps_json:
         raise ToolError(f"steps_json does not match candidate {cand.id} exactly; submit the id with "
                         "steps_json null, or copy that candidate's steps_json unchanged")
