@@ -120,7 +120,7 @@ an unsupported claim is regenerated; a twice-failing row is repaired.
 | L3 | identifier in a snapshot taken ≤ audit_at but exported later (link only, never cited) | 7 | 7 | 1.000 | 82/111 |
 | L4 | PDF text / screenshots | 1 | 1 | 1.000 | 83/111 |
 | L5 | sole free primary-profile delete within 90 min of `reported_at`, worker result matching `reported_status` | 11 | 11 | 1.000 | 94/111 |
-| L6 | sole free analytics anonymization in the same worker run (off) | 3 | 1 | 0.333 | not shipped |
+| L6 | sole free analytics anonymization in the same worker run (off in every run; measured with `--suite samples --observations-only --enable-sibling`) | 3 | 1 | 0.333 | not shipped |
 | — | after the scope rule | 94 | 94 | **1.000** | 94/111 |
 
 L2's two links are real but belong to an earlier request of the same user;
@@ -164,7 +164,9 @@ status and steps (INCOMPLETE); the stripped versions are not flagged.
 On the 518 evaluation requests (375 unique texts), the classifier marks
 exactly cases 533–542 as non-deletion; these are the 10 cases that
 `system_activity.csv` records as classified "non-deletion" by privacy intake
-(used only as a cross-check, never as an input). Cases 540 and 542 are
+(used only as a cross-check, never as an input; computed by `--suite custom`,
+group `intake_crosscheck`: 10 intake cases, 10 classifier NOT_APPLICABLE
+cases, none missing, none extra). Cases 540 and 542 are
 low-confidence between two non-deletion labels and carry `INTENT_REVIEW`.
 
 The classifier's few-shot examples share no text with these rows. Rows 18
@@ -240,8 +242,11 @@ Both produce exactly these steps (byte-identical `steps_json`):
 
 ### 5.4 Metamorphic suite (`--suite metamorphic`, 32 samples, 0 live model calls)
 
-Each check copies `dataset/` to a temp dir, perturbs it, and runs
-`World.load(<copy>)` with the guards on.
+The engine runs with the guards on and the agent off (these checks are about
+the deterministic engine). The rerun check decides the samples twice on
+`dataset/` itself; every other check copies `dataset/` to a temp dir, perturbs
+it, and runs `World.load(<copy>)`. The decoy is built for the first sample
+subject; the email-case and late-file checks perturb the most-cited text file.
 
 | Check | Perturbation | Result |
 |---|---|---|
@@ -273,13 +278,14 @@ Status / step precision / step recall unless noted.
 | 7 | `tombstone_17` is catalogued under the label `user_17`, so a register naming user_17 resolved a resource | labels that are user references never resolve a resource | 1.000 / 0.994 / 0.912; linking precision 0.989 | 1.000 / 1.000 / 0.912; linking precision 1.000 |
 | 8 | `support_replica.log` failed to parse: `event=` collided with structlog's own `event` argument in a warning | renamed the log field; a failing file is isolated, not fatal | 30/32 cited files parsed | 31/32 (32/32 with PDFs) |
 | 9 | Low-confidence fallback turned clear non-deletion requests into deletions | fallback applies only when DELETION is the top or second label | intent gold 18/20; CLASSIFY cross-check 8/10 | 20/20; 10/10 |
-| 10 | Universe check both caught misreads and decided admission | admission = id pattern + agreeing readings; unknown ids are admitted as vision_only and held until the agent re-reads | 12 vision rows admitted | 12 admitted + 11 vision_only held; 1 file escalated to the tiebreak (prompt `vision-v1`) |
+| 10 | Universe check both caught misreads and decided admission | admission = id pattern + agreeing readings; unknown ids are admitted as vision_only and held out of decisions (`VISION_ONLY_PENDING`) | 12 vision rows admitted | 12 admitted + 11 vision_only held; 1 file escalated to the tiebreak (prompt `vision-v1`) |
 | 11 | Prompts restructured into role / constraints / output / refusal / few-shot (`intent-v3`): deletion follow-ups ("verify my account was deleted") lost their DELETION reading; case_28 became NOT_APPLICABLE | label rule: a follow-up asking to verify a requested deletion is DELETION; one independent few-shot example (`intent-v4`) | samples status 0.969, recall 0.891 | 1.000 / 1.000 / 0.912; gold 20/20; cross-check 10/10 |
 | 12 | Contract checks ran only in the suite; a COMPLETE row was never checked against what its cited files say | per-row guards in `main.py`: citation guard, COMPLETE re-derivation with downgrade, policy contract, regenerate then repair, cross-row counts and status-mix drift | 1.000 / 1.000 / 0.912; 518 rows | unchanged: 518/518 rows byte-identical; 0 downgrades, 0 repairs; answer key COMPLETE rows re-derive 10/10 |
 | 13 | RETAIN was unconditional; `retained_order_records` relied on the `legal_hold_` prefix for its category | RETAIN only while the stated retention date (`retention_until` / `retained_until` / "retain until", 114 observations carry one, earliest 2031-12-31) is not before `audit_at`; `retained_order_records` and `retained_order_loaded` mapped to LEGAL_HOLD_RECORD / PRESENT explicitly | 1.000 / 1.000 / 0.912 | unchanged (every date is after every `audit_at`); synthetic passed date turns case_21's audit record into a finding |
 | 14 | rule_06's condition ("belongs only to the deletion subject") was ignored | an attachment one observation of which shows two subjects gets no step and `SHARED_ATTACHMENT` | 0 such attachments in the data | unchanged; synthetic case_479 proves the path |
 | 15 | tie-breaks relied on iteration order (link choice at equal layer and time, proximity/sibling event choice, observation, fact and SQL row order) | every set or candidate list feeding output or a tie-break sorted on content | metamorphic order/case/decoy checks already passed on the old code | unchanged; the order no longer depends on parser or manifest order by construction |
 | 16 | Investigator agent (L2) merged with free choice between engine candidates: on the 9 gated cases it chose a less-safe reading on 4 — `fact_links_only` on samples 01 and 02 (dropping an L5 link measured at 1.000), the ABSENT side of a same-file conflict on 135 and 383 — and the guards reverted all 4 (contract regeneration on 01/02, COMPLETE downgrade on 135/383) | action space restricted to monotone: a candidate must keep every engine finding and resource and never turn INCOMPLETE into COMPLETE; `fact_links_only`, scope-off and L6 candidates removed; a conflict offers only its safer side; the agent adds a candidate only via `apply_policy` on a verified record the parsers missed | 4 wrong choices, 4 guard reverts (`CONTRACT_REPAIRED` ×2 samples, `COMPLETE_DOWNGRADED` ×2) | 0 wrong choices, 0 reverts; the 4 cases have no admissible alternative; output byte-identical |
+| 17 | A fresh review (a context-free reader of the zip) found three documented safety behaviours the code did not have: an injection-flagged request could still be closed as NOT_APPLICABLE; `apply_policy` accepted a record the parsers had already extracted and an identifier anywhere in the file; the per-case wrapper did not cover intent classification, world loading or a damaged cache entry | a non-deletion label on an injection-flagged request is audited as a deletion; `apply_policy` refuses records the parsers extracted from that file and needs a subject identifier within 15 lines of the id; intent failure audits every request, world-load failure writes every row and exits 1, a damaged cache entry is a miss; 7 tests in `tests/test_review_gaps.py` | output sha256 `b43ff703…afff7ea` | unchanged `b43ff703…afff7ea`; flags unchanged |
 
 ## 6.1 Flags (518 evaluation cases, measure run `20261024T194721Z-deletion-requests-24896fd`)
 
@@ -329,19 +335,21 @@ identifiers, and the guards accept that citation only through the verified
 record kept in the trace. Tests: `tests/test_agent_monotone.py` (the four
 cases have no admissible alternative; looser submissions are refused).
 
-**Re-run (prompt `agent-v2`, live, then replayed by the measure run).**
+**Current answers (prompt `agent-v2`).** Re-recorded live after the
+fresh-review fixes changed the agent's tool schema (part of its cache key),
+then replayed by the measure run:
 
-| Case | Gate | Turns | Tools | Candidates offered | Chosen | Guard | Tokens in/out | USD |
-|---|---|---|---|---|---|---|---|---|
-| case_61 | zero observations | 4 | list_observations, search_raw_evidence ×3, submit_decision | engine_default | engine_default | none | 19,688 / 638 | 0.0915 |
-| case_63 | zero observations | 5 | list_observations, search_raw_evidence, read_evidence_file, search_raw_evidence, submit_decision | engine_default | engine_default | none | 29,661 / 611 | 0.1309 |
-| case_86 | state conflict (account_8473) | 4 | list_observations, read_evidence_file, search_raw_evidence, submit_decision | engine_default, conflict …:PRESENT | engine_default | none | 33,252 / 638 | 0.1458 |
-| case_135 | state conflict (account_1417) | 2 | list_observations, submit_decision | engine_default | engine_default | none | 10,864 / 414 | 0.0517 |
-| case_383 | state conflict (account_5043) | 2 | list_observations, submit_decision | engine_default | engine_default | none | 10,835 / 356 | 0.0505 |
-| case_390 | state conflict (account_7618) | 2 | list_observations, read_evidence_file, submit_decision | engine_default, conflict …:PRESENT | engine_default | none | 21,668 / 483 | 0.0963 |
-| case_01 (sample) | zero observations | 4 | list_observations, search_raw_evidence ×2, read_evidence_file, submit_decision | engine_default | engine_default | none | 20,981 / 614 | 0.0962 |
-| case_02 (sample) | zero observations | 3 | list_observations, search_raw_evidence ×2, read_evidence_file, submit_decision | engine_default | engine_default | none | 15,890 / 667 | 0.0769 |
-| case_04 (sample) | zero observations | 3 | list_observations, search_raw_evidence, submit_decision | engine_default | engine_default | none | 13,565 / 403 | 0.0623 |
+| Case | Gate | Turns | Tools | Candidates offered | Chosen | Tokens in/out | USD |
+|---|---|---|---|---|---|---|---|
+| case_61 | zero observations | 4 | list_observations, search_raw_evidence ×3, submit_decision | engine_default | engine_default | 19,756 / 639 | 0.0918 |
+| case_63 | zero observations | 4 | list_observations, search_raw_evidence, read_evidence_file, search_raw_evidence, submit_decision | engine_default | engine_default | 24,546 / 637 | 0.1109 |
+| case_86 | state conflict (account_8473) | 4 | list_observations, read_evidence_file, search_raw_evidence, submit_decision | engine_default, conflict …:PRESENT | engine_default | 33,458 / 803 | 0.1499 |
+| case_135 | state conflict (account_1417) | 3 | list_observations, read_evidence_file, submit_decision | engine_default | engine_default | 22,748 / 654 | 0.1041 |
+| case_383 | state conflict (account_5043) | 2 | list_observations, submit_decision | engine_default | engine_default | 10,862 / 365 | 0.0507 |
+| case_390 | state conflict (account_7618) | 3 | list_observations, read_evidence_file, submit_decision | engine_default, conflict …:PRESENT | engine_default | 30,310 / 508 | 0.1314 |
+
+On the samples (run before that fix, same constraint): case_01 4 turns,
+case_02 3, case_04 3, each choosing engine_default; no guard intervened.
 
 | | Before (free choice) | After (monotone) |
 |---|---|---|
@@ -361,17 +369,25 @@ score.
 - needs_review rows: **`case_61`** (evaluation) and **`case_04`** (samples) are
   `COMPLETE` with `[]` and flagged `NEEDS_REVIEW`; they are the only rows the
   contract suite reports (`complete_empty`). The guards keep them on purpose
-  (section 2.1); the L2 agent will re-examine them. On case_04 the answer
+  (section 2.1); the agent has run on both and kept the engine decision
+  (section 6.2). On case_04 the answer
   key's steps do re-derive from their cited evidence: the evidence is there,
   the subject's accounts are what our linking cannot reach.
 - 504 of 518 evaluation subjects are observed in exactly one eligible
   evidence file (3 in two, 11 in none; `--suite coverage`): a single misread
   file decides a case. The late-file check shows the effect: removing
   `evidence_92` flips four sample cases.
-- 12 vision_only screenshot rows are held until the agent re-reads their files;
-  5 belong to `case_45`.
+- 12 vision_only screenshot rows are held out of decisions (5 belong to
+  `case_45`); the agent sees one only when it would be the sole support of a
+  violation, which none is.
 - L6 is off. The agent has changed no row: on every gated case it either had
   no admissible alternative or kept the engine decision.
+- The 32 labelled samples were used both to tune and to report: the sample
+  scores are training-set scores. NOT_APPLICABLE has no labelled sample; the
+  20-row intent gold set and the privacy-intake cross-check are its only
+  checks. On the ungated carrier case the injection byte-identity check holds
+  whenever the two intent labels match; the end-to-end protection is the
+  injection fallback in `intent.py` `classify`.
 - `case_527`: ticket attachment `support_3896` is treated as a support
   message (REDACT) rather than an attachment (DELETE), because a later file
   classifies the same resource as a support message. Which classification

@@ -130,10 +130,16 @@ class LLM:
         cached = CACHE_DIR / f"{key}.json"
         base = {"purpose": purpose, "prompt_version": prompt_version, "cache_key": key}
         if cached.is_file():
-            out = json.loads(cached.read_text(encoding="utf-8"))
-            self._log({**base, "model": out["model"], "cached": True, "input_tokens": 0, "output_tokens": 0,
-                       "usd": 0.0})
-            return out["result"]
+            try:
+                out = json.loads(cached.read_text(encoding="utf-8"))
+                result = out["result"]
+            except (OSError, ValueError, KeyError, TypeError):
+                # A damaged cache entry is a miss, never a crash.
+                log.warning("llm_cache_unreadable", purpose=purpose, cache_key=key)
+            else:
+                self._log({**base, "model": out.get("model", model), "cached": True, "input_tokens": 0,
+                           "output_tokens": 0, "usd": 0.0})
+                return result
         for attempt in range(1, JSON_ATTEMPTS + 1):
             result, served_by = self._request(base, model, system, content, schema, max_tokens, effort, attempt)
             if result is not None:

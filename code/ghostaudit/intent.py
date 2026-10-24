@@ -5,7 +5,8 @@ enum per text and nothing else, so an instruction embedded in a request can
 change at most its label, never the steps. The engine never reads the text.
 
 Fallbacks: a text the model does not return is treated as DELETION and
-flagged. Low confidence becomes DELETION only when DELETION is the top or the
+flagged; so is a non-deletion label on a text flagged as carrying processing
+instructions. Low confidence becomes DELETION only when DELETION is the top or the
 second label; low confidence between two non-deletion labels stays
 NOT_APPLICABLE and is flagged for review.
 Without credentials every text is DELETION and flagged INTENT_UNAVAILABLE.
@@ -82,6 +83,13 @@ def classify(texts: list[str], llm: LLM | None) -> dict[str, Classified]:
                                          detail=f"{it['label']}/{it['second_label']}, not a deletion"))
             if it["injection_suspected"]:
                 flags.append(FlagHit(flag=Flag.INJECTION_SUSPECTED))
+                if label is not IntentLabel.DELETION:
+                    # A request carrying processing instructions is never
+                    # closed as NOT_APPLICABLE on the model's word: the
+                    # instruction may be what moved the label. Audit it.
+                    flags.append(FlagHit(flag=Flag.INTENT_REVIEW,
+                                         detail=f"{it['label']} with suspected injection, audited as DELETION"))
+                    label = IntentLabel.DELETION
             out[text] = Classified(
                 Intent(label=label, confidence=it["confidence"], injection_suspected=it["injection_suspected"]),
                 it["language"], tuple(flags), it["label"], it["second_label"])

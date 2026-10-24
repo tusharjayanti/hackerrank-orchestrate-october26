@@ -19,6 +19,15 @@ from ghostaudit.schemas import LinkLayer, ObservedState
 WORLD = replace(World.load(), llm=None)
 
 
+def _missed(world, file_id, rid):
+    """The same world with the parsers having missed `rid` in `file_id`."""
+    from ghostaudit.ingest.observations import ObservationTable
+
+    t = world.table
+    keep = [o for o in t.observations if not (o.file_id == file_id and o.resource_id == rid)]
+    return replace(world, table=ObservationTable(keep, t.coverage, t.stats, t.identity))
+
+
 def finding(op, rid, ev="evidence_01", system="account_service"):
     return {"evidence_id": ev, "operation": op, "phase": "FINDING", "resource_id": rid, "state": "PRESENT",
             "step_no": 1, "system_id": system}
@@ -86,16 +95,17 @@ def test_submit_rejects_an_inadmissible_candidate():
 
 
 def test_apply_policy_needs_the_resource_and_the_subject_in_the_file():
-    req = WORLD.requests["case_05"]
-    uid = WORLD.identity.resolve_email(req["email"]).user_id
+    world = _missed(WORLD, "evidence_54", "account_005")
+    req = world.requests["case_05"]
+    uid = world.identity.resolve_email(req["email"]).user_id
     with pytest.raises(tools.ToolError, match="does not appear"):
-        tools.verified_observation(WORLD, req, uid, "account_service", "account_999999", ObservedState.PRESENT,
+        tools.verified_observation(world, req, uid, "account_service", "account_999999", ObservedState.PRESENT,
                                    "evidence_54")
-    other = WORLD.identity.resolve_email(WORLD.requests["case_01"]["email"]).user_id
+    other = world.identity.resolve_email(world.requests["case_01"]["email"]).user_id
     with pytest.raises(tools.ToolError, match="none of the subject's identifiers"):
-        tools.verified_observation(WORLD, req, other, "account_service", "account_005", ObservedState.PRESENT,
+        tools.verified_observation(world, req, other, "account_service", "account_005", ObservedState.PRESENT,
                                    "evidence_54")
-    obs = tools.verified_observation(WORLD, req, uid, "account_service", "account_005", ObservedState.PRESENT,
+    obs = tools.verified_observation(world, req, uid, "account_service", "account_005", ObservedState.PRESENT,
                                      "evidence_54")
     assert obs.source_detail == "agent:apply_policy" and "leila.haddad@yahoo.com" in obs.identifiers
 
@@ -104,10 +114,11 @@ def test_a_verified_missed_record_builds_a_stricter_candidate():
     # case_01's subject has no record in evidence_54; suppose the agent found
     # one the parsers missed: the candidate keeps the engine's verification
     # and adds a finding for the new record.
-    req = WORLD.requests["case_05"]
+    world = _missed(WORLD, "evidence_54", "account_005")
+    req = world.requests["case_05"]
     decision, trace = decide_case(WORLD, req, use_agent=False)
     uid = trace["identity"]["user_id"]
-    obs = tools.verified_observation(WORLD, req, uid, "account_service", "account_005", ObservedState.PRESENT,
+    obs = tools.verified_observation(world, req, uid, "account_service", "account_005", ObservedState.PRESENT,
                                      "evidence_54")
     obs = obs.model_copy(update={"resource_id": "account_005", "system_id": "account_service"})
     built = build_with_observation(WORLD, req, trace, obs)

@@ -73,7 +73,11 @@ def decide_all(requests: list[dict], world: World, traces_dir: Path, max_layer: 
     """One guarded row per request. Guards (ghostaudit/guards.py) re-derive
     COMPLETE rows from their cited evidence, check every citation and the
     contract, and regenerate or repair a failing row."""
-    intents = classify([r["request_text"] for r in requests], world.llm)
+    try:
+        intents = classify([r["request_text"] for r in requests], world.llm)
+    except Exception as e:  # noqa: BLE001 - intent failure must not cost any case its row
+        log.error("intent_failed", error=repr(e), traceback=traceback.format_exc())
+        intents = classify([r["request_text"] for r in requests], None)
     guards = guards or GuardContext(world, CitationRegistry.load(DATASET_DIR))
     decisions = []
     for req in requests:
@@ -146,7 +150,14 @@ def main(argv: list[str] | None = None) -> int:
 
     with open(args.requests, newline="", encoding="utf-8") as f:
         requests = sorted(csv.DictReader(f), key=lambda r: case_sort_key(r["case_id"]))
-    world = World.load(run_id=run_id)
+    try:
+        world = World.load(run_id=run_id)
+    except Exception as e:  # noqa: BLE001 - even with no world, every case gets a row
+        log.error("world_load_failed", error=repr(e), traceback=traceback.format_exc())
+        decisions = [engine_default(r["case_id"], f"world load: {type(e).__name__}") for r in requests]
+        write_output(decisions, out_path)
+        print(f"run {run_id}: world failed to load ({e!r}); wrote {len(decisions)} NEEDS_REVIEW rows to {out_path}")
+        return 1
     decisions = decide_all(requests, world, traces_dir, LinkLayer(args.max_layer))
     write_output(decisions, out_path)
     cross_row = cross_row_check(decisions, requests, Path(args.requests), sample_mix(DATASET_DIR))

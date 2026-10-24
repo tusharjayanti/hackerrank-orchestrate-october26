@@ -139,8 +139,9 @@ class Linker:
 
     def _proximity(self, c: CaseContext, is_free) -> Link | None:
         """Layer 5: the primary-profile delete whose worker result matches the
-        case's reported status and that nobody else owns. The narrow window is
-        tried first; the wide one only when the narrow one has no candidate."""
+        case's reported status and that nobody else owns, within the single
+        90-minute window (a narrower first pass was removed: it took other
+        cases' deletes)."""
         results = RESULT_FOR_STATUS.get(c.reported_status)
         for window in PROXIMITY_WINDOWS:
             near = [e for e in self._deletes

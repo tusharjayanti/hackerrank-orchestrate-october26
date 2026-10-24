@@ -175,7 +175,8 @@ def suite_samples(args: argparse.Namespace) -> int:
                                     "metrics": result.metrics, "confusion": result.confusion,
                                     "per_operation": result.per_operation, "per_case": result.per_case})
     dump_path = _out_dir(args) / "samples_dump.md"
-    dump_path.write_text(render_dump(expected, actual, Path(args.traces), args.dump_all,
+    traces = Path(args.traces) if args.traces else (_traces_for(Path(args.pred)) or CODE_ROOT / "runs")
+    dump_path.write_text(render_dump(expected, actual, traces, args.dump_all,
                                      f"# Samples dump\n\nexpected: `{args.expected}`  \npredicted: `{args.pred}`\n"),
                          encoding="utf-8")
     _print_samples(result, args.pred, dump_path)
@@ -338,10 +339,23 @@ def _owner_conflicts(table) -> dict[str, list[str]]:
 
 # ---------------------------------------------------------------- samples, observations only
 
+def _with_sibling(world):
+    """The same world with layer 6 on, solved again over every request."""
+    from dataclasses import replace
+
+    from ghostaudit.linking import Linker
+
+    linker = Linker(world.table, world.activity, enable_sibling=True)
+    linker.prepare([c for c in (case_context(world.identity, r) for r in world.requests.values()) if c])
+    return replace(world, linker=linker)
+
+
 def suite_samples_observations(args: argparse.Namespace) -> int:
     """Linking only (no policy): which gold resources does each layer of the
     ladder tie to the user, and how many of its links are wrong."""
     world = World.load(Path(args.dataset), _formats(args))
+    if args.enable_sibling:
+        world = _with_sibling(world)
     dataset = Path(args.dataset)
     gold = read_output(Path(args.expected))
     layers = list(LinkLayer)
@@ -455,9 +469,13 @@ def suite_custom(args: argparse.Namespace) -> int:
         if got[stripped].intent.injection_suspected:
             failures.append(f"row {n}: stripped request was flagged as injection")
 
+    crosscheck = _intake_crosscheck(world, Path(args.dataset))
+    if crosscheck["missing"] or crosscheck["extra"]:
+        failures.append(f"intake cross-check: missing {crosscheck['missing']}, extra {crosscheck['extra']}")
     n_ok = sum(r["ok"] for r in rows)
     report = {"suite": "custom", "group": "intent_gold", "label_accuracy": f"{n_ok}/{len(rows)}",
-              "rows": rows, "injection_identity": identity_checks, "failures": failures}
+              "rows": rows, "injection_identity": identity_checks, "intake_crosscheck": crosscheck,
+              "failures": failures}
     _write_report(args, "custom", report)
     print(f"custom/intent_gold: {n_ok}/{len(rows)} rows correct (label and injection flag)")
     print(f"  {'#':>2} {'lang':7s} {'expected':10s} {'raw':10s} {'effective':10s} conf  inj")
@@ -468,9 +486,37 @@ def suite_custom(args: argparse.Namespace) -> int:
     for c in identity_checks:
         print(f"  row {c['row']} vs stripped on {c['carrier']}: byte-identical={c['byte_identical']} "
               f"status={c['status']} stripped flagged={c['stripped_flagged']}")
+    print(f"custom/intake_crosscheck: {len(crosscheck['intake_cases'])} cases privacy intake classified "
+          f"non-deletion; classifier NOT_APPLICABLE {len(crosscheck['classifier_cases'])}; "
+          f"missing {crosscheck['missing']} extra {crosscheck['extra']}")
     for f in failures:
         print(f"  FAIL {f}")
     return 0 if not failures else 1
+
+
+def _intake_crosscheck(world, dataset: Path) -> dict:
+    """Cross-check only, never an input: the evaluation cases whose subject's
+    account privacy intake classified as non-deletion (CLASSIFY_REQUEST rows
+    in system_activity.csv, within the case's request..audit window) against
+    the cases the intent classifier calls NOT_APPLICABLE."""
+    from datetime import datetime, timezone
+
+    requests = _requests(dataset / "deletion_requests.csv")
+    labels = classify([r["request_text"] for r in requests], world.llm)
+    classifier = sorted((r["case_id"] for r in requests
+                         if not labels[r["request_text"]].intent.authorizes_deletion), key=case_sort_key)
+    far = datetime(9999, 1, 1, tzinfo=timezone.utc)
+    intake = set()
+    for c in world.activity.classifications:
+        owners = world.linker.owners(("account_service", c.resource_id), far)
+        for r in requests:
+            uid = world.identity.resolve_email(r["email"]).user_id
+            if uid in owners and parse_ts(r["requested_at"]) <= c.event_time <= parse_ts(r["audit_at"]):
+                intake.add(r["case_id"])
+    intake_cases = sorted(intake, key=case_sort_key)
+    return {"intake_cases": intake_cases, "classifier_cases": classifier,
+            "missing": [c for c in intake_cases if c not in classifier],
+            "extra": [c for c in classifier if c not in intake]}
 
 
 SUITES = {
@@ -505,7 +551,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="contract: requests the output must cover")
     p.add_argument("--expected", default=str(DATASET_DIR / "sample_output.csv"), help="samples: answer key")
     p.add_argument("--pred", default=None, help="samples: predictions (default runs/<mode>/sample_output.csv)")
-    p.add_argument("--traces", default=str(CODE_ROOT / "traces"))
+    p.add_argument("--traces", default=None,
+                   help="samples: traces dir for the dump (default: the run that wrote --pred)")
+    p.add_argument("--enable-sibling", action="store_true",
+                   help="samples --observations-only: switch L6 on to measure it (off in every run)")
     p.add_argument("--dump-all", action="store_true", help="samples: dump every case, not only mismatches")
     p.add_argument("--observations-only", action="store_true",
                    help="samples: compare resources found in evidence with the answer key (no policy)")

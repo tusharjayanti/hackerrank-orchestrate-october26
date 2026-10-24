@@ -41,6 +41,10 @@ log = get_logger(__name__)
 
 MAX_FILE_CHARS = 20_000
 MAX_SEARCH_HITS = 50
+# apply_policy: a subject identifier must appear within this many lines of a
+# line naming the resource (one record in a log, a SQL row, a pretty-printed
+# JSON object), not just anywhere in the file.
+SUBJECT_WINDOW = 15
 
 
 class ToolInput(BaseModel):
@@ -66,7 +70,7 @@ class ApplyPolicyInput(ToolInput):
     system_id: str
     resource_id: str
     observed_state: ObservedState
-    evidence_id: str = Field(description="The file or activity id that shows this state.")
+    evidence_id: str = Field(description="The evidence file id (evidence_NN) that shows this record.")
 
 
 class SubmitDecisionInput(ToolInput):
@@ -259,7 +263,11 @@ def apply_policy(world: World, inp: ApplyPolicyInput, session: Session | None = 
 def verified_observation(world: World, req: dict, uid: str, system_id: str, resource_id: str,
                          state: ObservedState, evidence_id: str):
     """An Observation for a record the parsers missed, or a ToolError saying
-    why the claim is not grounded in the file."""
+    why the claim is not grounded in the file: the file must be eligible and
+    not a screenshot, must not be one the parsers already extracted this
+    resource from, must name the resource, and must show one of the subject's
+    identifiers within SUBJECT_WINDOW lines of it. The state is the agent's
+    reading; the monotone rule only lets it make the decision stricter."""
     from ..ingest.observations import system_for
     from ..schemas import Observation
 
@@ -268,25 +276,27 @@ def verified_observation(world: World, req: dict, uid: str, system_id: str, reso
         raise ToolError("screenshots are read twice by the vision stage; cite a text, log, SQL or PDF file")
     if system_for(resource_id) != system_id:
         raise ToolError(f"{resource_id} does not belong to {system_id}")
-    text = _file_text(f)
-    if not re.search(rf"\b{re.escape(resource_id)}\b", text):
+    if any(o.file_id == evidence_id for o in world.table.by_resource.get((system_id, resource_id), ())):
+        raise ToolError(f"the parsers already extracted {resource_id} from {evidence_id}; its state there is "
+                        "in the engine decision")
+    lines = _file_text(f).splitlines()
+    rid = re.compile(rf"\b{re.escape(resource_id)}\b")
+    hits = [n for n, line in enumerate(lines) if rid.search(line)]
+    if not hits:
         raise ToolError(f"{resource_id} does not appear in {evidence_id}")
+    near: set[str] = set()
+    for n in hits:
+        for line in lines[max(0, n - SUBJECT_WINDOW):n + SUBJECT_WINDOW + 1]:
+            near |= _line_identifiers(line)
     subject = world.identity.users.get(uid)
     mine = sorted(subject.identifiers()) if subject else []
-    present = sorted(i for i in mine if i in _text_identifiers(text))
+    present = sorted(i for i in mine if i in near)
     if not present:
-        raise ToolError(f"{evidence_id} shows none of the subject's identifiers, so it cannot tie "
-                        f"{resource_id} to this person")
+        raise ToolError(f"{evidence_id} shows none of the subject's identifiers within {SUBJECT_WINDOW} lines "
+                        f"of {resource_id}, so it cannot tie that record to this person")
     return Observation(file_id=f.file_id, captured_at=f.captured_at, observed_at=f.captured_at, system_id=system_id,
                        resource_id=resource_id, data_category=category_for(system_id), state=state,
                        identifiers=tuple(present), source_detail="agent:apply_policy", vision=False)
-
-
-def _text_identifiers(text: str) -> set[str]:
-    out: set[str] = set()
-    for line in text.splitlines():
-        out |= _line_identifiers(line)
-    return out
 
 
 def _offer_candidate(world: World, req: dict, inp: ApplyPolicyInput, session: Session) -> dict:
