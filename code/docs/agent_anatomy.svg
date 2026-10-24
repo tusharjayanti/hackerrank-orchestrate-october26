@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="900" viewBox="0 0 1240 900" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">
+  <rect width="1240" height="900" fill="#0d0d0f"/>
+  <defs>
+    <style>
+      .grp { fill: none; stroke: #4a4a50; stroke-width: 1; stroke-dasharray: 3 4; }
+      .lbl { fill: #e9e8e4; font-size: 13px; font-weight: 600; }
+      .sub { fill: #9d9c97; font-size: 11px; }
+      .node { fill: #141416; stroke: #5a5a60; stroke-width: 1.2; }
+      .ln { stroke: #4a4a50; stroke-width: 1.2; fill: none; }
+      .lnp { stroke: #8f86e8; stroke-width: 1.4; fill: none; }
+      .lnt { stroke: #3fb58f; stroke-width: 1.4; fill: none; }
+      .tag { fill: #9d9c97; font-size: 10px; letter-spacing: 1.2px; font-weight: 600; }
+    </style>
+  </defs>
+
+  <text x="40" y="40" fill="#e9e8e4" font-size="20" font-weight="600">Ghost Data — agent anatomy</text>
+  <text x="40" y="62" class="sub">Four layers: ingestion builds the memory, the deterministic engine decides, the agent is invoked only when the engine can't, and every row passes the guards.</text>
+
+  <!-- ===== INGESTION (far left) ===== -->
+  <rect x="40" y="110" width="250" height="330" rx="12" class="grp"/>
+  <text x="56" y="132" class="tag">INGESTION · ONCE PER RUN</text>
+
+  <circle cx="110" cy="190" r="28" class="node"/><text x="110" y="187" text-anchor="middle" class="lbl">Parsers</text><text x="110" y="201" text-anchor="middle" class="sub">json txt sql log pdf</text>
+  <circle cx="220" cy="190" r="28" class="node" stroke="#8f86e8"/><text x="220" y="187" text-anchor="middle" class="lbl">Vision</text><text x="220" y="201" text-anchor="middle" class="sub">2 reads agree</text>
+  <circle cx="110" cy="290" r="28" class="node"/><text x="110" y="287" text-anchor="middle" class="lbl">Identity</text><text x="110" y="301" text-anchor="middle" class="sub">current+historic</text>
+  <circle cx="220" cy="290" r="28" class="node" stroke="#8f86e8"/><text x="220" y="287" text-anchor="middle" class="lbl">Intent</text><text x="220" y="301" text-anchor="middle" class="sub">enum, multilingual</text>
+  <circle cx="165" cy="390" r="30" class="node"/><text x="165" y="387" text-anchor="middle" class="lbl">Activity</text><text x="165" y="401" text-anchor="middle" class="sub">links, claims</text>
+
+  <!-- ingestion -> memory -->
+  <path d="M165 440 L165 540 L420 540 L420 700 L438 700" class="ln"/>
+  <text x="250" y="532" class="sub">builds memory</text>
+
+  <!-- ===== ENGINE (left-centre) ===== -->
+  <rect x="330" y="110" width="300" height="330" rx="12" class="grp"/>
+  <text x="346" y="132" class="tag">DETERMINISTIC ENGINE · EVERY CASE</text>
+
+  <circle cx="400" cy="190" r="28" class="node"/><text x="400" y="187" text-anchor="middle" class="lbl">Resolve</text><text x="400" y="201" text-anchor="middle" class="sub">email → user</text>
+  <circle cx="490" cy="190" r="28" class="node"/><text x="490" y="187" text-anchor="middle" class="lbl">Link</text><text x="490" y="201" text-anchor="middle" class="sub">ladder L1–L5</text>
+  <circle cx="580" cy="190" r="28" class="node"/><text x="580" y="187" text-anchor="middle" class="lbl">State</text><text x="580" y="201" text-anchor="middle" class="sub">at audit_at</text>
+  <circle cx="400" cy="290" r="28" class="node"/><text x="400" y="287" text-anchor="middle" class="lbl">Policy</text><text x="400" y="301" text-anchor="middle" class="sub">15 rules</text>
+  <circle cx="490" cy="290" r="28" class="node"/><text x="490" y="287" text-anchor="middle" class="lbl">Steps</text><text x="490" y="301" text-anchor="middle" class="sub">sorted, numbered</text>
+  <circle cx="580" cy="290" r="30" class="node" stroke="#8f86e8" stroke-width="1.6"/><text x="580" y="287" text-anchor="middle" class="lbl">Gate</text><text x="580" y="301" text-anchor="middle" class="sub">3 conditions</text>
+  <circle cx="490" cy="390" r="30" class="node"/><text x="490" y="387" text-anchor="middle" class="lbl">Candidates</text><text x="490" y="401" text-anchor="middle" class="sub">admissible only</text>
+
+  <path d="M428 190 L462 190" class="ln"/><path d="M518 190 L552 190" class="ln"/>
+  <path d="M580 218 L580 230 L400 230 L400 262" class="ln"/>
+  <path d="M428 290 L462 290" class="ln"/><path d="M518 290 L550 290" class="ln"/>
+  <path d="M490 318 L490 360" class="ln"/>
+
+  <!-- gate -> agent (flagged) -->
+  <path d="M610 290 C 700 290, 720 470, 780 500" class="lnp"/>
+  <text x="676" y="372" fill="#8f86e8" font-size="11" transform="rotate(52 676 372)">flagged only</text>
+  <!-- candidates -> agent -->
+  <path d="M520 390 C 620 390, 700 520, 782 520" class="lnp" stroke-dasharray="4 3"/>
+  <text x="640" y="440" fill="#8f86e8" font-size="11">engine-built candidates</text>
+  <!-- agent -> steps (chosen) -->
+  <path d="M782 540 C 700 580, 600 560, 540 310 L520 300" class="lnp"/>
+  <text x="610" y="590" fill="#8f86e8" font-size="11">chosen candidate → steps</text>
+
+  <!-- ===== LLM (top right) ===== -->
+  <rect x="680" y="110" width="520" height="300" rx="12" class="grp"/>
+  <text x="696" y="132" class="tag">AGENTIC LAYER · MODEL</text>
+
+  <rect x="696" y="150" width="200" height="190" rx="10" class="grp"/>
+  <circle cx="760" cy="195" r="22" class="node"/><text x="760" y="199" text-anchor="middle" class="lbl">Role</text>
+  <circle cx="840" cy="195" r="22" class="node"/><text x="840" y="199" text-anchor="middle" class="lbl">Output</text>
+  <circle cx="760" cy="275" r="22" class="node"/><text x="760" y="272" text-anchor="middle" class="lbl">Constraints</text><text x="760" y="286" text-anchor="middle" class="sub">stricter only</text>
+  <circle cx="840" cy="275" r="22" class="node"/><text x="840" y="272" text-anchor="middle" class="lbl">Few-shot</text><text x="840" y="286" text-anchor="middle" class="sub">2 cases</text>
+  <text x="796" y="330" text-anchor="middle" class="sub">Prompt · versioned .py</text>
+
+  <circle cx="940" cy="235" r="34" class="node" stroke="#e36b9a" stroke-width="1.6"/>
+  <text x="940" y="231" text-anchor="middle" class="lbl">LLM</text><text x="940" y="246" text-anchor="middle" class="sub">Opus</text>
+
+  <rect x="984" y="150" width="200" height="190" rx="10" class="grp"/>
+  <circle cx="1046" cy="195" r="22" class="node"/><text x="1046" y="192" text-anchor="middle" class="lbl">Read</text><text x="1046" y="206" text-anchor="middle" class="sub">raw file</text>
+  <circle cx="1126" cy="195" r="22" class="node"/><text x="1126" y="192" text-anchor="middle" class="lbl">Compare</text><text x="1126" y="206" text-anchor="middle" class="sub">readings</text>
+  <circle cx="1046" cy="275" r="22" class="node"/><text x="1046" y="272" text-anchor="middle" class="lbl">Conflict</text><text x="1046" y="286" text-anchor="middle" class="sub">rules §6.5</text>
+  <circle cx="1126" cy="275" r="22" class="node"/><text x="1126" y="272" text-anchor="middle" class="lbl">Choose</text><text x="1126" y="286" text-anchor="middle" class="sub">one candidate</text>
+  <text x="1084" y="330" text-anchor="middle" class="sub">Reasoning · bounded</text>
+
+  <path d="M896 235 L906 235" class="ln"/><path d="M974 235 L984 235" class="ln"/>
+  <path d="M940 269 L940 440" class="ln"/>
+
+  <!-- ===== AGENT (centre) ===== -->
+  <circle cx="940" cy="520" r="52" class="node" stroke="#8f86e8" stroke-width="2"/>
+  <text x="940" y="512" text-anchor="middle" class="lbl">Investigator</text>
+  <text x="940" y="528" text-anchor="middle" class="lbl">Agent</text>
+  <text x="940" y="545" text-anchor="middle" class="sub">≤ 6 turns</text>
+  <path d="M782 520 L888 520" class="lnp"/>
+
+  <!-- ===== MEMORY (bottom left of agent) ===== -->
+  <rect x="440" y="620" width="400" height="200" rx="12" class="grp"/>
+  <text x="456" y="642" class="tag">MEMORY</text>
+  <circle cx="520" cy="710" r="30" class="node"/><text x="520" y="705" text-anchor="middle" class="lbl">Observation</text><text x="520" y="719" text-anchor="middle" class="sub">table</text>
+  <circle cx="640" cy="710" r="30" class="node"/><text x="640" y="705" text-anchor="middle" class="lbl">Case</text><text x="640" y="719" text-anchor="middle" class="sub">context</text>
+  <circle cx="760" cy="710" r="30" class="node"/><text x="760" y="705" text-anchor="middle" class="lbl">Cache</text><text x="760" y="719" text-anchor="middle" class="sub">content hash</text>
+  <text x="520" y="770" text-anchor="middle" class="sub">long-term</text>
+  <text x="640" y="770" text-anchor="middle" class="sub">short-term</text>
+  <text x="760" y="770" text-anchor="middle" class="sub">model calls</text>
+  <path d="M900 555 C 860 600, 760 620, 700 640" class="ln"/>
+
+  <!-- ===== TOOLS (bottom right of agent) ===== -->
+  <rect x="860" y="620" width="340" height="200" rx="12" class="grp" stroke="#3fb58f"/>
+  <text x="876" y="642" class="tag" fill="#3fb58f">TOOL CALLING · STRICT SCHEMAS</text>
+  <circle cx="920" cy="690" r="24" class="node" stroke="#3fb58f"/><text x="920" y="687" text-anchor="middle" class="lbl" font-size="11">list_</text><text x="920" y="699" text-anchor="middle" class="lbl" font-size="11">observations</text>
+  <circle cx="1000" cy="690" r="24" class="node" stroke="#3fb58f"/><text x="1000" y="687" text-anchor="middle" class="lbl" font-size="11">read_</text><text x="1000" y="699" text-anchor="middle" class="lbl" font-size="11">evidence</text>
+  <circle cx="1080" cy="690" r="24" class="node" stroke="#3fb58f"/><text x="1080" y="687" text-anchor="middle" class="lbl" font-size="11">search_</text><text x="1080" y="699" text-anchor="middle" class="lbl" font-size="11">raw</text>
+  <circle cx="1160" cy="690" r="24" class="node" stroke="#3fb58f"/><text x="1160" y="687" text-anchor="middle" class="lbl" font-size="11">apply_</text><text x="1160" y="699" text-anchor="middle" class="lbl" font-size="11">policy</text>
+  <circle cx="1040" cy="770" r="26" class="node" stroke="#3fb58f" stroke-width="1.8"/><text x="1040" y="767" text-anchor="middle" class="lbl" font-size="11">submit_</text><text x="1040" y="779" text-anchor="middle" class="lbl" font-size="11">decision</text>
+  <text x="1040" y="808" text-anchor="middle" class="sub">accepts admissible engine candidates only</text>
+  <path d="M980 555 C 1000 590, 1020 610, 1030 640" class="lnt"/>
+  <!-- tool results loop back -->
+  <path d="M1030 640 C 1060 600, 1010 575, 992 556" class="lnt" stroke-dasharray="3 3"/>
+  <text x="1075" y="600" fill="#3fb58f" font-size="11">call / result</text>
+
+  <!-- ===== GUARDS + OUTPUT (bottom-left) ===== -->
+  <rect x="40" y="620" width="360" height="200" rx="12" class="grp" stroke="#d9823f"/>
+  <text x="56" y="642" class="tag" fill="#d9823f">GUARDRAILS · EVERY ROW</text>
+  <circle cx="110" cy="700" r="26" class="node" stroke="#d9823f"/><text x="110" y="697" text-anchor="middle" class="lbl" font-size="11">Contract</text><text x="110" y="710" text-anchor="middle" class="sub">15 triples</text>
+  <circle cx="200" cy="700" r="26" class="node" stroke="#d9823f"/><text x="200" y="697" text-anchor="middle" class="lbl" font-size="11">Time +</text><text x="200" y="710" text-anchor="middle" class="sub">citation</text>
+  <circle cx="290" cy="700" r="26" class="node" stroke="#d9823f"/><text x="290" y="697" text-anchor="middle" class="lbl" font-size="11">Re-derive</text><text x="290" y="710" text-anchor="middle" class="sub">downgrade only</text>
+  <rect x="80" y="750" width="280" height="44" rx="8" class="node"/>
+  <text x="220" y="768" text-anchor="middle" class="lbl">output.csv · 518 rows</text>
+  <text x="220" y="784" text-anchor="middle" class="sub">traces · flags · usage</text>
+  <!-- steps -> guards -->
+  <path d="M490 318 L490 340 L360 340 L360 560 L220 560 L220 620" class="ln"/>
+  <text x="372" y="420" class="sub">every row</text>
+
+  <!-- Legend -->
+  <g font-size="11">
+    <circle cx="700" cy="860" r="6" class="node"/><text x="714" y="864" class="sub">deterministic code</text>
+    <circle cx="840" cy="860" r="6" class="node" stroke="#8f86e8"/><text x="854" y="864" class="sub">model, schema-constrained</text>
+    <circle cx="1030" cy="860" r="6" class="node" stroke="#3fb58f"/><text x="1044" y="864" class="sub">tool</text>
+    <circle cx="1100" cy="860" r="6" class="node" stroke="#d9823f"/><text x="1114" y="864" class="sub">guard</text>
+  </g>
+</svg>

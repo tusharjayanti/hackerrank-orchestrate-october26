@@ -7,3 +7,4 @@ code/runs/
 code/traces/
 code/.cache/
 code.zip
+.DS_Store

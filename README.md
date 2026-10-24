@@ -24,6 +24,18 @@ state comes only from evidence, and only from evidence captured at or before
 
 ## Architecture (five layers)
 
+![Data flow: L0 ingestion, L1 engine, L2 agent, L3 guards, output](code/docs/system_design.svg)
+
+Text version: `dataset/` → **L0** parsers (`ingest/parse_records.py`,
+`parse_sql.py`, `parse_logs.py`, `parse_vision.py`), `identity.py`,
+`intent.py` → observation table (`ingest/observations.py`) → **L1** per case
+(`engine/decide.py`: intent gate → `linking.py` → `engine/state.py` →
+`engine/policy.py` → `engine/steps.py`) → **L2** agent on flagged cases
+(`agent/`) → **L3** guards on every row (`guards.py` via `main.py`) →
+`output.csv`, traces, `runs/llm_calls.jsonl`. The full design brief, with the
+agent anatomy diagram, is `code/DESIGN.md`; `code/CODE_MAP.md` lists each
+module's job and key functions.
+
 | Layer | What it does | Code |
 |---|---|---|
 | L0 Ingestion | One parser per format (JSON/TXT records, SQL snapshots run in SQLite, logs in seven line syntaxes joined by trace id, PDF text, PNG via vision) producing `Observation(file_id, captured_at, observed_at, system_id, resource_id, data_category, state, identifiers, source_detail, vision)` plus `Coverage` records for complete snapshots. Identity index over current and historical identifiers. Request intent. | `code/ghostaudit/ingest/`, `identity.py`, `intent.py` |
