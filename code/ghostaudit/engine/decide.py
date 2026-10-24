@@ -17,7 +17,7 @@ from ..linking import CaseContext, Linker
 from ..llm import LLM, credentials_present
 from ..obs import get_logger
 from ..schemas import DataCategory, Decision, DeletionStatus, Flag, FlagSet, LinkLayer, RequiredAction
-from .policy import load_rules, policy_diff
+from .policy import Scoped, load_rules, policy_diff, retention_expired, shared_attachment
 from .state import out_of_scope, state_at
 from .steps import build_steps
 
@@ -95,6 +95,9 @@ def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SI
     treatments, unmapped = policy_diff(resources, world.rules)
     for u in unmapped:
         flags.add(Flag.UNMAPPED_CATEGORY, u)
+    for r in resources:
+        if r.shared:
+            flags.add(Flag.SHARED_ATTACHMENT, f"{r.system_id}/{r.resource_id} left in place")
     trace["treatments"] = [_treatment_trace(t) for t in treatments]
     status, steps = build_steps(treatments)
     if not treatments:
@@ -140,8 +143,10 @@ def _intent_gate(classified: Classified, flags: FlagSet, trace: dict) -> bool:
 
 
 def _scoped_resources(world: World, request: dict, uid: str, max_layer: LinkLayer, flags: FlagSet,
-                      notes: list[str], trace: dict) -> list[tuple]:
-    """Linked resources in this request's scope, each with its state at audit_at."""
+                      notes: list[str], trace: dict) -> list[Scoped]:
+    """Linked resources in this request's scope, each with its state at audit_at
+    and the two policy conditions read from evidence (retention date passed,
+    attachment shared with another subject). Sorted by (system_id, resource_id)."""
     requested_at, audit_at = parse_ts(request["requested_at"]), parse_ts(request["audit_at"])
     links = world.linker.links(case_context(world.identity, request), max_layer)
     trace["links"] = [lk.model_dump(mode="json") for lk in sorted(links.values(),
@@ -159,7 +164,13 @@ def _scoped_resources(world: World, request: dict, uid: str, max_layer: LinkLaye
             continue
         st = state_at(res, world.table, audit_at)
         category = st.data_category if st and st.data_category else category_for(res[0])
-        resources.append((res[0], res[1], category, st))
+        eligible = world.table.eligible(res, audit_at)
+        expired = retention_expired(eligible, audit_at)
+        shared = category is DataCategory.SUPPORT_ATTACHMENT and shared_attachment(eligible,
+                                                                                  world.identity.owner_of)
+        if expired:
+            notes.append(f"retention date before audit_at: {res[0]}/{res[1]}")
+        resources.append(Scoped(res[0], res[1], category, st, expired, shared))
         if st and st.conflicting:
             trace["state_conflicts"].append(f"{res[0]}/{res[1]}")
     return resources

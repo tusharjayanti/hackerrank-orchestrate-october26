@@ -21,6 +21,8 @@ PROXIMITY_WINDOWS = (timedelta(minutes=90),)
 SIBLING_WINDOW = timedelta(minutes=180)
 # The worker result a case's own account delete carries, by reported_status
 # (16/16 SUCCESS for COMPLETE, 10/10 FAILED for NOT_STARTED on the samples).
+# reported_status tells us which worker run belonged to this request, and the
+# evidence tells us what state that run left behind.
 RESULT_FOR_STATUS: dict[str, frozenset[str]] = {
     "COMPLETE": frozenset({"SUCCESS"}),
     "NOT_STARTED": frozenset({"FAILED"}),
@@ -64,7 +66,9 @@ class Linker:
         def keep(link: Link) -> None:
             res = (link.system_id, link.resource_id)
             cur = found.get(res)
-            if cur is None or (link.layer, link.linked_at) < (cur.layer, cur.linked_at):
+            # Ties broken on the source id, never on iteration order.
+            if cur is None or (link.layer, link.linked_at, link.source_id) < (cur.layer, cur.linked_at,
+                                                                             cur.source_id):
                 found[res] = link
 
         for o in self.table.by_user.get(uid, ()):
@@ -126,7 +130,7 @@ class Linker:
                         has_account = True
                 has_analytics = any(r[0] == "analytics_platform" for r in (*facts[cid], *got))
                 if self.enable_sibling and has_account and not has_analytics:
-                    account = next(r for r in (*facts[cid], *got) if r[0] == "account_service")
+                    account = min(r for r in (*facts[cid], *got) if r[0] == "account_service")
                     link = self._sibling(c, account[1], lambda res: free(c, res))
                     if link:
                         got[(link.system_id, link.resource_id)] = link
@@ -148,7 +152,7 @@ class Linker:
             if len(cands) > 1:
                 return None
             event = min((e for e in near if e.resource_id == cands[0]),
-                        key=lambda e: abs(e.event_time - c.reported_at))
+                        key=lambda e: (abs(e.event_time - c.reported_at), e.activity_id))
             return self._link(c.user_id, ("account_service", cands[0]), LinkLayer.PROXIMITY, event.activity_id,
                               event.event_time)
         return None
@@ -160,13 +164,14 @@ class Linker:
                    and abs(e.event_time - c.reported_at) <= PROXIMITY_WINDOWS[-1]]
         if not deletes:
             return None
-        start = min(deletes, key=lambda e: abs(e.event_time - c.reported_at)).event_time
+        start = min(deletes, key=lambda e: (abs(e.event_time - c.reported_at), e.activity_id)).event_time
         cands = sorted({e.resource_id for e in self._anonymizations
                         if start <= e.event_time <= start + SIBLING_WINDOW and e.event_time <= c.audit_at
                         and is_free(("analytics_platform", e.resource_id))})
         if len(cands) != 1:
             return None
-        event = next(e for e in self._anonymizations if e.resource_id == cands[0] and e.event_time >= start)
+        event = min((e for e in self._anonymizations if e.resource_id == cands[0] and e.event_time >= start),
+                    key=lambda e: (e.event_time, e.activity_id))
         return self._link(c.user_id, ("analytics_platform", cands[0]), LinkLayer.SIBLING, event.activity_id,
                           event.event_time)
 

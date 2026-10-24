@@ -22,7 +22,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from ..obs import get_logger
-from ..schemas import ObservedState
+from ..schemas import DataCategory, ObservedState
 from .manifest import EvidenceFile, parse_ts
 from .observations import (
     LOOKUP_KEYS,
@@ -116,6 +116,8 @@ def _state_hint(event: str, d: dict[str, str]) -> tuple[bool, dict] | None:
     if event in ("connector_heartbeat", "connector_config_loaded"):
         return False, {}
     if event == "retained_order_loaded":
+        # A retained order was loaded: the legal-hold record exists (PRESENT,
+        # set below); its retention date, if any, is read like any field.
         return False, {}
     if event in ("connector_config_read_completed", "analytics_profile_read_completed",
                  "analytics_profile_read", "support_ticket_read_completed", "message_read",
@@ -198,6 +200,9 @@ def parse(f: EvidenceFile) -> ParseResult:
                            source_detail=f"log:L{n}:{event}", absent=absent, extra_ids=extra)
         if o is not None and event == "attachment_pii_scan":
             o = o.model_copy(update={"state": ObservedState.PRESENT})
+        if o is not None and event == "retained_order_loaded":
+            o = o.model_copy(update={"state": ObservedState.PRESENT,
+                                     "data_category": DataCategory.LEGAL_HOLD_RECORD})
         _add(res, o)
 
     orphans = sorted(tr for tr in trace_ids if not trace_has_resource[tr])

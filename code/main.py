@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
 from ghostaudit.engine.decide import World, decide_case  # noqa: E402
+from ghostaudit.guards import GuardContext, cross_row_check, guard_decision, sample_mix  # noqa: E402
+from ghostaudit.ingest.manifest import CitationRegistry  # noqa: E402
 from ghostaudit.intent import classify  # noqa: E402
 from ghostaudit.llm import CALL_LOG, model_for  # noqa: E402
 from ghostaudit.obs import get_logger  # noqa: E402
@@ -64,12 +66,23 @@ def engine_default(case_id: str, reason: str) -> Decision:
     return Decision(case_id=case_id, status=DeletionStatus.COMPLETE, steps=(), flags=flags.hits)
 
 
-def decide_all(requests: list[dict], world: World, traces_dir: Path, max_layer: LinkLayer) -> list[Decision]:
+def decide_all(requests: list[dict], world: World, traces_dir: Path, max_layer: LinkLayer,
+               guards: GuardContext | None = None) -> list[Decision]:
+    """One guarded row per request. Guards (ghostaudit/guards.py) re-derive
+    COMPLETE rows from their cited evidence, check every citation and the
+    contract, and regenerate or repair a failing row."""
     intents = classify([r["request_text"] for r in requests], world.llm)
+    guards = guards or GuardContext(world, CitationRegistry.load(DATASET_DIR))
     decisions = []
     for req in requests:
+        intent = intents[req["request_text"]]
         try:
-            decision, trace = decide_case(world, req, max_layer, intents[req["request_text"]])
+            decision, trace = decide_case(world, req, max_layer, intent)
+            # The engine's own decision is the regeneration of a failing row.
+            # TODO(agent): once the investigator can change a row, this must
+            # call the engine without the agent.
+            decision, trace = guard_decision(decision, trace, req, guards,
+                                             regenerate=lambda: decide_case(world, req, max_layer, intent))
         except Exception as e:  # noqa: BLE001 - one case must never cost the others their rows
             log.error("case_failed", case_id=req["case_id"], error=repr(e), traceback=traceback.format_exc())
             decision = engine_default(req["case_id"], type(e).__name__)
@@ -128,12 +141,14 @@ def main(argv: list[str] | None = None) -> int:
     world = World.load(run_id=run_id)
     decisions = decide_all(requests, world, traces_dir, LinkLayer(args.max_layer))
     write_output(decisions, out_path)
+    cross_row = cross_row_check(decisions, requests, Path(args.requests), sample_mix(DATASET_DIR))
 
     flags = Counter(f for d in decisions for f in d.fired())
     manifest = {
         "run_id": run_id, "mode": args.mode, "commit": sha, "dirty": dirty, "requests": str(args.requests),
         "output": str(out_path), "rows": len(decisions),
         "status": dict(Counter(d.status.value for d in decisions)),
+        "cross_row": cross_row,
         "flags": dict(sorted(flags.items())),
         "models": {stage: model_for(stage) for stage in ("VISION", "INTENT", "AGENT")},
         "model_access": world.llm is not None,
@@ -142,7 +157,11 @@ def main(argv: list[str] | None = None) -> int:
     (run_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n",
                                                encoding="utf-8")
     print(f"run {run_id}: wrote {len(decisions)} rows to {out_path}; traces and manifest in {run_dir}")
-    return 0
+    for w in cross_row["warnings"]:
+        print(f"WARNING: {w}", file=sys.stderr)
+    for e in cross_row["errors"]:
+        print(f"ERROR: {e}", file=sys.stderr)
+    return 1 if cross_row["errors"] else 0
 
 
 if __name__ == "__main__":
