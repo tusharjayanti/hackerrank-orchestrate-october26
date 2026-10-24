@@ -238,3 +238,25 @@ The Track B (guards worktree) SESSION START entry above with timestamp 2026-10-2
 
 While debugging, Track A (agent worktree) saw case_04's row in dataset/sample_output.csv. That file is participant data the samples suite scores against; no candidate or prompt was shaped by it.
 
+## [2026-10-24T19:53:28Z] Monotone agent, measure run, final reports, packaging and fresh-clone check
+
+User Prompt (verbatim, secrets redacted):
+[User messages, condensed for length] Make the agent monotone toward caution: submit_decision accepts a candidate only if its findings are a superset of the engine default's and it never turns INCOMPLETE into COMPLETE; this removes fact_links_only and the ABSENT side of same-file conflicts; the agent's useful path is search, read, and apply_policy building a stricter candidate. Tests: samples 01, 02 and eval 135, 383 have no admissible alternative. Re-run the six invoked cases. Note "stricter, never looser" in prompts.py and the README; put the episode in the change log; note case_527 under known limitations; add one log line that Track A saw case_04's sample answer (participant data); append a correction for Track B's SESSION START timestamp; refresh the flags table; remove the worktrees; commit "feat: investigator agent, guardrail suites, monotone agent constraint"; measure run on that commit (clean cache replay, locked config) with output.csv at the root and usage_report.md; run all six suites. Then: final evaluation_report.md and README from the measure run, code/CODE_MAP.md, commit "docs: final reports, readme and code map from measure run", package.sh and zip inspection, a fresh-clone test following the README literally with sha256 check, a log.txt audit, git status clean, final sha256 of output.csv and code.zip.
+
+Agent Response Summary:
+Made the agent monotone: candidates must keep every engine finding and resource and never turn INCOMPLETE into COMPLETE; fact_links_only, scope-off and L6 candidates were removed (the stated superset rule alone did not exclude fact_links_only on samples 01/02, so a no-dropped-resource condition was added); conflicts offer only the safer side; apply_policy now builds a stricter candidate from a record verified in an eligible file, and the guards accept that citation through the trace. Re-run on all 9 gated cases: 0 wrong choices, 0 guard reverts, output byte-identical, $0.80 of Opus calls. Added replay mode (no key, cached answers only) so the cached run reproduces without credentials. Measure run 20261024T194721Z-deletion-requests-24896fd at clean commit 24896fd: 518 rows, sha256 b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea, 43 cache hits, 0 live calls, breaker not tripped; cold cost 56 calls, $1.0737. All six suites pass on it with 0 live calls. Reports, README and CODE_MAP were updated from that run; a fresh unzip following the README reproduces the same sha256 (uv and pip paths). Also restating the two short notes above in full form: the Track B SESSION START entry's 2026-10-25T00:00:00Z timestamp was a placeholder for 2026-10-24T18:55:36Z, and Track A saw case_04's row in dataset/sample_output.csv (participant data) without shaping anything by it.
+
+Actions:
+* Edited code/ghostaudit/agent/{candidates,tools,loop,prompts}.py, code/ghostaudit/guards.py, code/ghostaudit/llm.py, code/ghostaudit/engine/decide.py, code/ghostaudit/ingest/observations.py, code/main.py, code/evaluation/main.py; created code/tests/test_agent_monotone.py, code/evaluation/usage.py, code/evaluation/usage_report.md, code/CODE_MAP.md
+* git worktree remove agent and guards; git branch -d agent guards
+* git commit 24896fd, 2de0920, fef4fc8; measure runs on evaluation and samples; all six suites; code/package.sh; fresh-clone tests in the scratchpad
+* Audited log.txt (no key material; tool and model lines populated)
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+
