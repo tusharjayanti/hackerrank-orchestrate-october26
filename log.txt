@@ -55,3 +55,25 @@ repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T16:58:45Z] Linking ladder (L1-L5), scope rule, engine, first samples score
+
+User Prompt (verbatim, secrets redacted):
+[User message, condensed for length] Commit parser work as "feat: records, sql and log parsers, observation table, coverage suite". Before elimination logic: (1) ingest the 12 LINK_RESOURCE_IDENTITY rows as link facts (incl. object_19 -> user_07); (2) park the 10 CLASSIFY_REQUEST "non-deletion" rows as an intent cross-check; (3) use snapshot inner observed_at for LINK eligibility but file captured_at for CITATION eligibility; report how many of the 13 post-audit_at links this recovers. Then build a ladder L1 identifier, L2 catalog, L3 inner snapshot (link only), L4 vision, L5 deletion_worker proximity +/-10 min with elimination, adopt only if exactly one candidate; each link records layer and confidence; report precision/recall per layer vs 111 gold resources, L5 separately, and per-case unlinked list. Make "already ABSENT before requested_at" a policy rule with a test (account_6523). Then build the engine (state_at, policy_diff, build_steps) and show the first real samples score.
+
+Agent Response Summary:
+Committed baa4a9b. Added ingest/activity.py (links, parked classifications, deletion events), schemas Link/LinkLayer, linking.py ladder, engine/{state,policy,steps,decide}.py, code/main.py, a per-layer linking report, and tests/test_engine.py. Ladder on samples: L1 75/76, L2 0/2 (both are resources from an earlier request, now removed by scope), L3 7/7 (recovers 7 of the 13), L5 6/6; 88/111 linked with 1.000 precision after the scope rule. Samples score: status 0.969, step precision 0.994, recall 0.865, sequence exact 0.500; the remaining misses are linking-limited (generated cases put the account delete 45-75 min before reported_at, where candidates are ambiguous) plus case_07 (PDF). Corrected the earlier report: the account_6523 extra belongs to case_17 and is user_17's current email. Full 518 run: 14 contract violations (COMPLETE with no evidence-backed steps); all 10 CLASSIFY rows map uniquely to eval cases 533-542.
+
+Actions:
+* git commit baa4a9b
+* Created code/ghostaudit/ingest/activity.py, code/ghostaudit/linking.py, code/ghostaudit/engine/{__init__,state,policy,steps,decide}.py, code/main.py, code/tests/test_engine.py
+* Edited code/ghostaudit/schemas.py, ingest/observations.py, ingest/parse_logs.py, evaluation/main.py
+* Ran linking report, engine on samples and all 518 cases, contract and samples suites, pytest (48 passed)
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

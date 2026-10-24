@@ -22,8 +22,10 @@ from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
 from ghostaudit.guards import check_output, load_requests  # noqa: E402
 from ghostaudit.identity import IdentityIndex  # noqa: E402
 from ghostaudit.ingest.manifest import CitationRegistry, Manifest, parse_ts  # noqa: E402
+from ghostaudit.engine.decide import World  # noqa: E402
+from ghostaudit.engine.state import out_of_scope  # noqa: E402
 from ghostaudit.ingest.observations import build_table  # noqa: E402
-from ghostaudit.schemas import OPERATION_ORDER, DeletionStatus, case_sort_key  # noqa: E402
+from ghostaudit.schemas import OPERATION_ORDER, DeletionStatus, LinkLayer, case_sort_key  # noqa: E402
 
 STEP_KEY_FIELDS = ("phase", "operation", "state", "system_id", "resource_id", "evidence_id")
 SCORED_FIELDS = ("operation", "state", "system_id", "resource_id", "evidence_id")
@@ -367,56 +369,69 @@ def suite_coverage(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- samples, observations only
 
 def suite_samples_observations(args: argparse.Namespace) -> int:
-    identity, manifest, table = _world(args)
+    """Linking only (no policy): which gold resources does each layer of the
+    ladder tie to the user, and how many of its links are wrong."""
+    world = World.load(Path(args.dataset), _formats(args))
     dataset = Path(args.dataset)
     gold = _read_output(Path(args.expected))
-    traces = Path(args.traces)
-    traces.mkdir(parents=True, exist_ok=True)
-    tp = n_gold = n_pred = 0
-    exact = 0
-    dump = [f"# Samples, observations only (formats={args.formats or 'all'})\n"]
+    layers = list(LinkLayer)
+    per_layer = {lay: Counter() for lay in layers}
+    n_gold = 0
+    scoped_tp = scoped_pred = 0
+    still = []
+    dump = [f"# Samples, linking only (formats={args.formats or 'all'})\n"]
     for r in _requests(dataset / "sample_deletion_requests.csv"):
         cid = r["case_id"]
-        audit_at = parse_ts(r["audit_at"])
-        uid = identity.resolve_email(r["email"]).user_id
-        steps = gold[cid][1]
-        g = _gold_resources(steps)
-        obs = table.case_observations(uid, audit_at) if uid else []
-        pred = {(o.system_id, o.resource_id) for o in obs}
-        tp += len(g & pred)
+        audit_at, reported_at, requested_at = (parse_ts(r[k]) for k in ("audit_at", "reported_at", "requested_at"))
+        uid = world.identity.resolve_email(r["email"]).user_id
+        g = _gold_resources(gold[cid][1])
         n_gold += len(g)
-        n_pred += len(pred)
-        exact += g == pred
-        (traces / f"{cid}.json").write_text(json.dumps(
-            {"case_id": cid, "user_id": uid, "audit_at": r["audit_at"],
-             "observations": [_obs_dict(o) for o in obs]}, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-        if g == pred and not args.dump_all:
-            continue
-        dump.append(f"\n## {cid} ({uid}, audit_at {r['audit_at']}): gold {len(g)}, found {len(pred)}, "
-                    f"matched {len(g & pred)}\n")
-        for res in sorted(g | pred):
-            tag = "ok" if res in g and res in pred else ("MISSING" if res in g else "extra")
-            mine = [o for o in obs if (o.system_id, o.resource_id) == res]
-            if mine:
-                where = "; ".join(f"{o.file_id}@{o.observed_at:%m-%dT%H:%M} {o.state}" for o in mine)
-            else:
-                anywhere = table.by_resource.get(res, [])
-                where = "not linked; elsewhere: " + ("; ".join(
-                    f"{o.file_id}@{o.captured_at:%m-%d}{'(late)' if o.captured_at > audit_at else ''} "
-                    f"{o.state} ids={list(o.identifiers)}" for o in anywhere) or "nowhere in parsed evidence")
-            dump.append(f"- [{tag}] {res[0]}/{res[1]}: {where}")
-    n = len(gold)
-    recall = tp / n_gold if n_gold else 1.0
-    precision = tp / n_pred if n_pred else 0.0
-    report = {"suite": "samples-observations", "formats_enabled": args.formats or "all",
-              "resource_recall": recall, "resource_precision": precision, "resource_set_exact": exact / n}
-    _write_report(args, "samples_observations", report)
-    dump_path = _out_dir(args) / "samples_observations_dump.md"
+        links = world.linker.links(uid, audit_at, reported_at)
+        _, l5_cands = world.linker.proximity_link(uid, audit_at, reported_at, world.linker.fact_links(uid, audit_at))
+        for res, lk in links.items():
+            per_layer[lk.layer]["links"] += 1
+            per_layer[lk.layer]["correct"] += res in g
+        scoped = {res for res, lk in links.items()
+                  if not out_of_scope(res, world.table, requested_at, audit_at, lk.linked_at)}
+        scoped_tp += len(scoped & g)
+        scoped_pred += len(scoped)
+        missing = sorted(g - set(links))
+        extra = sorted(set(links) - g)
+        if missing:
+            still.append((cid, uid, missing))
+        if missing or extra or args.dump_all:
+            dump.append(f"\n## {cid} ({uid}) gold {len(g)}, linked {len(links)}, L5 candidates {l5_cands}\n")
+            for res in sorted(g | set(links)):
+                lk = links.get(res)
+                tag = ("ok" if res in g else ("out-of-scope" if res not in scoped else "EXTRA")) if lk else "MISSING"
+                how = f"L{int(lk.layer)} {lk.source_id} conf={lk.confidence}" if lk else ""
+                dump.append(f"- [{tag}] {res[0]}/{res[1]} {how}")
+    cum_tp = cum_links = 0
+    rows = []
+    print(f"samples, linking ladder: {len(gold)} cases, {n_gold} gold resources")
+    print(f"  {'layer':22s} {'links':>5s} {'correct':>7s} {'precision':>9s} {'cum recall':>10s}")
+    for lay in layers:
+        c = per_layer[lay]
+        cum_tp += c["correct"]
+        cum_links += c["links"]
+        prec = c["correct"] / c["links"] if c["links"] else float("nan")
+        rows.append({"layer": int(lay), "name": lay.name, "links": c["links"], "correct": c["correct"],
+                     "precision": prec, "cumulative_recall": cum_tp / n_gold,
+                     "cumulative_precision": cum_tp / cum_links if cum_links else float("nan")})
+        print(f"  L{int(lay)} {lay.name:19s} {c['links']:5d} {c['correct']:7d} {prec:9.3f} "
+              f"{cum_tp:4d}/{n_gold} {cum_tp / n_gold:.3f}")
+    print(f"  after scope rule: {scoped_tp}/{scoped_pred} linked resources in gold "
+          f"(precision {scoped_tp / scoped_pred if scoped_pred else 0:.3f})")
+    print(f"  still unlinked: {sum(len(m) for _, _, m in still)} resources in {len(still)} cases")
+    for cid, uid, missing in still:
+        print(f"    {cid} ({uid}): " + ", ".join(f"{s}/{r}" for s, r in missing))
+    report = {"suite": "samples-linking", "layers": rows, "gold_resources": n_gold,
+              "scoped_precision": scoped_tp / scoped_pred if scoped_pred else None,
+              "still_unlinked": [{"case_id": c, "user_id": u, "resources": [f"{s}/{r}" for s, r in m]}
+                                 for c, u, m in still]}
+    _write_report(args, "samples_linking", report)
+    dump_path = _out_dir(args) / "samples_linking_dump.md"
     dump_path.write_text("\n".join(dump) + "\n", encoding="utf-8")
-    print(f"samples (observations only, formats={args.formats or 'all'}): {n} cases")
-    print(f"  gold resources found   {tp}/{n_gold} (recall {recall:.3f})")
-    print(f"  found resources in gold {tp}/{n_pred} (precision {precision:.3f})")
-    print(f"  resource set exact     {exact}/{n}")
     print(f"  dump: {dump_path}")
     return 0
 

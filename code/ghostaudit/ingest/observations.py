@@ -58,6 +58,12 @@ SYSTEM_CATEGORY: dict[str, DataCategory] = {
 
 COLLECTION_CATEGORY: dict[str, DataCategory] = {
     "ticket_attachments": DataCategory.SUPPORT_ATTACHMENT,
+    # A contact-index row is a copy of the subject's contact identifiers, not
+    # a conversation with shared context (sample case_10 deletes support_002).
+    "legacy_contact_index": DataCategory.SECONDARY_IDENTIFIER,
+    # A contact row carrying a marketing opt-in is a marketing profile,
+    # whatever service serves it (sample case_12 deletes analytics_9914).
+    "marketing_contact": DataCategory.MARKETING_PROFILE,
 }
 
 # Fields that carry a direct identifier (prohibited after REDACT/ANONYMIZE).

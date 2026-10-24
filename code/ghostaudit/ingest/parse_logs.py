@@ -129,7 +129,8 @@ def _state_hint(event: str, d: dict[str, str]) -> tuple[bool, dict] | None:
 _NOISE = {"level", "severity", "logger", "service", "trace", "event", "instance", "pod", "region", "host",
           "attempt", "duration_ms", "took_ms", "shard", "wait_ms", "seq", "latency_ms", "rows",
           "http_status", "result", "index", "total_hits", "integrity_check", "detector", "file",
-          "available", "archive_present", "decision", "policy", "source", "cache", "pool"}
+          "available", "archive_present", "decision", "policy", "source", "cache", "pool", "marker_found",
+          "last_write", "email_opt_in", "eligible", "deletion_block", "scheduler_registered", "last_run", "reason", "access"}
 
 
 def parse(f: EvidenceFile) -> ParseResult:
@@ -145,6 +146,10 @@ def parse(f: EvidenceFile) -> ParseResult:
             continue
         lines.append((t[0], t[1], n))
 
+    # A batch header names the source for every line that does not name its own.
+    batch_source = next((d["source"] for _, d, _ in lines if d.get("event") == "batch_started" and d.get("source")),
+                        None)
+    trace_source: dict[str, str] = {d["trace"]: d["source"] for _, d, _ in lines if d.get("trace") and d.get("source")}
     trace_ids: dict[str, set[str]] = defaultdict(set)
     trace_has_resource: dict[str, bool] = defaultdict(bool)
     for _, d, _ in lines:
@@ -186,8 +191,11 @@ def parse(f: EvidenceFile) -> ParseResult:
             # A deletion marker means the record was deleted, not that it holds PII.
             record = {"resource_id": rid}
         extra = sorted(trace_ids.get(d.get("trace", ""), set()))
-        o = observe_record(f, ts, record, system_hint=d.get("service"), source_detail=f"log:L{n}:{event}",
-                           absent=absent, extra_ids=extra)
+        source = d.get("source") or trace_source.get(d.get("trace", "")) or batch_source
+        if "email_opt_in" in d:
+            source = "marketing_contact"
+        o = observe_record(f, ts, record, system_hint=d.get("service"), collection=source,
+                           source_detail=f"log:L{n}:{event}", absent=absent, extra_ids=extra)
         if o is not None and event == "attachment_pii_scan":
             o = o.model_copy(update={"state": ObservedState.PRESENT})
         _add(res, o)

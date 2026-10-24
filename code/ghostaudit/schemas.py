@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -204,6 +204,35 @@ class IdentitySet(_Frozen):
     def identifiers(self) -> frozenset[str]:
         """All normalised identifiers that link a record to this user."""
         return self.emails | self.phones | self.email_hashes | {self.user_id.lower()}
+
+
+class LinkLayer(IntEnum):
+    """How a resource was tied to a user, strongest first."""
+
+    IDENTIFIER = 1  # identifier in evidence captured <= audit_at
+    CATALOG = 2  # LINK_RESOURCE_IDENTITY activity row <= audit_at
+    INNER_SNAPSHOT = 3  # identifier in a snapshot taken <= audit_at, exported later: link only
+    VISION = 4  # identifier read from an image or PDF
+    PROXIMITY = 5  # sole remaining deletion-worker candidate near reported_at
+
+
+LINK_CONFIDENCE: dict[LinkLayer, float] = {
+    LinkLayer.IDENTIFIER: 1.0,
+    LinkLayer.CATALOG: 1.0,
+    LinkLayer.INNER_SNAPSHOT: 0.95,
+    LinkLayer.VISION: 0.8,
+    LinkLayer.PROXIMITY: 0.6,
+}
+
+
+class Link(_Frozen):
+    user_id: str
+    system_id: str
+    resource_id: str
+    layer: LinkLayer
+    confidence: float
+    source_id: str
+    linked_at: datetime
 
 
 class IntentLabel(StrEnum):
