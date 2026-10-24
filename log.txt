@@ -387,3 +387,22 @@ branch=main
 repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-25T06:10:00Z] Zip rebuilt and fresh-clone check
+
+User Prompt (verbatim, secrets redacted):
+(continuation) rebuild the zip, fresh-clone check, final hashes for both files.
+
+Agent Response Summary:
+./package.sh run from /tmp built code.zip (75 files) from the docs commit; no organizer docs, dataset, .env, log.txt or output.csv inside. Fresh-clone check: unzip, copy dataset/ and the model cache, uv sync, replayed measure -> output.csv sha256 32c89163...1817, identical; pytest 131 passed, 1 skipped (the tune-output test, as documented).
+
+Actions:
+* Ran package.sh, unzip, uv sync, code/main.py --mode measure, pytest in a scratch directory
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
