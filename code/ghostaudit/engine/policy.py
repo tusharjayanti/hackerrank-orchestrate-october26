@@ -102,10 +102,14 @@ def treat(system_id: str, resource_id: str, category: DataCategory | None, state
 
 
 def policy_diff(resources: list[tuple[str, str, DataCategory | None, ResourceState | None]],
-                rules: dict[DataCategory, RequiredAction]) -> list[Treatment]:
-    out = []
+                rules: dict[DataCategory, RequiredAction]) -> tuple[list[Treatment], list[str]]:
+    """Treatments for every resource policy covers, and the resources it does
+    not (no rule for the category, or a state the rule table cannot judge)."""
+    out, unmapped = [], []
     for system_id, resource_id, category, state in resources:
         t = treat(system_id, resource_id, category, state, rules)
-        if t is not None:
+        if t is None:
+            unmapped.append(f"{system_id}/{resource_id} ({category}, {state.state.value if state else 'no state'})")
+        else:
             out.append(t)
-    return out
+    return out, unmapped

@@ -31,7 +31,15 @@ from ghostaudit.engine.decide import World, decide_case  # noqa: E402
 from ghostaudit.intent import classify  # noqa: E402
 from ghostaudit.llm import CALL_LOG, model_for  # noqa: E402
 from ghostaudit.obs import get_logger  # noqa: E402
-from ghostaudit.schemas import OUTPUT_HEADER, Decision, DeletionStatus, LinkLayer, case_sort_key  # noqa: E402
+from ghostaudit.schemas import (  # noqa: E402
+    OUTPUT_HEADER,
+    Decision,
+    DeletionStatus,
+    Flag,
+    FlagSet,
+    LinkLayer,
+    case_sort_key,
+)
 
 log = get_logger("main")
 
@@ -50,8 +58,10 @@ def git_commit() -> tuple[str, bool]:
 def engine_default(case_id: str, reason: str) -> Decision:
     """The row written when a case cannot be decided: no finding is invented
     and the row is marked for review. A missing row is never acceptable."""
-    return Decision(case_id=case_id, status=DeletionStatus.COMPLETE, steps=(),
-                    flags=("NEEDS_REVIEW", f"ENGINE_ERROR:{reason}"))
+    flags = FlagSet()
+    flags.add(Flag.ENGINE_ERROR, reason)
+    flags.add(Flag.NEEDS_REVIEW, "engine error")
+    return Decision(case_id=case_id, status=DeletionStatus.COMPLETE, steps=(), flags=flags.hits)
 
 
 def decide_all(requests: list[dict], world: World, traces_dir: Path, max_layer: LinkLayer) -> list[Decision]:
@@ -63,7 +73,7 @@ def decide_all(requests: list[dict], world: World, traces_dir: Path, max_layer: 
         except Exception as e:  # noqa: BLE001 - one case must never cost the others their rows
             log.error("case_failed", case_id=req["case_id"], error=repr(e), traceback=traceback.format_exc())
             decision = engine_default(req["case_id"], type(e).__name__)
-            trace = {"case_id": req["case_id"], "error": repr(e), "flags": list(decision.flags)}
+            trace = {"case_id": req["case_id"], "error": repr(e), **FlagSet(decision.flags).trace()}
         decisions.append(decision)
         (traces_dir / f"{req['case_id']}.json").write_text(
             json.dumps(trace, indent=1, sort_keys=True, default=str) + "\n", encoding="utf-8")
@@ -119,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     decisions = decide_all(requests, world, traces_dir, LinkLayer(args.max_layer))
     write_output(decisions, out_path)
 
-    flags = Counter(f.split(":")[0] for d in decisions for f in d.flags)
+    flags = Counter(f for d in decisions for f in d.fired())
     manifest = {
         "run_id": run_id, "mode": args.mode, "commit": sha, "dirty": dirty, "requests": str(args.requests),
         "output": str(out_path), "rows": len(decisions),

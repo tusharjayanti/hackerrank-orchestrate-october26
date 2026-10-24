@@ -8,7 +8,7 @@ Fallbacks: a text the model does not return is treated as DELETION and
 flagged. Low confidence becomes DELETION only when DELETION is the top or the
 second label; low confidence between two non-deletion labels stays
 NOT_APPLICABLE and is flagged for review.
-Without credentials every text is DELETION and flagged INTENT_NOT_CLASSIFIED.
+Without credentials every text is DELETION and flagged INTENT_UNAVAILABLE.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from . import intent_prompts as ip
 from .llm import LLM, LLMExtractionFailed, LLMUnavailable, model_for
 from .obs import get_logger
-from .schemas import Intent, IntentLabel
+from .schemas import Flag, FlagHit, Intent, IntentLabel
 
 log = get_logger(__name__)
 
@@ -29,7 +29,7 @@ BATCH_SIZE = 25
 class Classified:
     intent: Intent  # effective label, after fallbacks
     language: str
-    flags: tuple[str, ...]
+    flags: tuple[FlagHit, ...]
     raw_label: str = ""  # what the model said
     second_label: str = ""
 
@@ -44,7 +44,8 @@ def classify(texts: list[str], llm: LLM | None) -> dict[str, Classified]:
     out: dict[str, Classified] = {}
     if llm is None:
         for t in unique:
-            out[t] = Classified(Intent(label=IntentLabel.DELETION, confidence="low"), "", ("INTENT_NOT_CLASSIFIED",))
+            out[t] = Classified(Intent(label=IntentLabel.DELETION, confidence="low"), "",
+                                (FlagHit(flag=Flag.INTENT_UNAVAILABLE, detail="no model credentials"),))
         return out
     for start in range(0, len(unique), BATCH_SIZE):
         batch = unique[start:start + BATCH_SIZE]
@@ -63,7 +64,7 @@ def classify(texts: list[str], llm: LLM | None) -> dict[str, Classified]:
             if it is None:
                 log.warning("intent_missing", batch=start // BATCH_SIZE, index=i)
                 out[text] = Classified(Intent(label=IntentLabel.DELETION, confidence="low"), "",
-                                       ("INTENT_MISSING",))
+                                       (FlagHit(flag=Flag.INTENT_UNAVAILABLE, detail="no answer for this text"),))
                 continue
             label = IntentLabel(it["label"])
             flags = []
@@ -72,13 +73,15 @@ def classify(texts: list[str], llm: LLM | None) -> dict[str, Classified]:
                     # Fallback: hesitation between DELETION and anything else
                     # is audited as a deletion; a missed deletion leaves data
                     # behind, an extra audit does not.
-                    flags.append(f"INTENT_LOW_CONFIDENCE:{it['label']}/{it['second_label']}")
+                    flags.append(FlagHit(flag=Flag.INTENT_REVIEW,
+                                         detail=f"{it['label']}/{it['second_label']}, audited as DELETION"))
                     label = IntentLabel.DELETION
                 else:
                     # Two non-deletion readings: still not a deletion request.
-                    flags.append(f"INTENT_REVIEW:{it['label']}/{it['second_label']}")
+                    flags.append(FlagHit(flag=Flag.INTENT_REVIEW,
+                                         detail=f"{it['label']}/{it['second_label']}, not a deletion"))
             if it["injection_suspected"]:
-                flags.append("INJECTION_SUSPECTED")
+                flags.append(FlagHit(flag=Flag.INJECTION_SUSPECTED))
             out[text] = Classified(
                 Intent(label=label, confidence=it["confidence"], injection_suspected=it["injection_suspected"]),
                 it["language"], tuple(flags), it["label"], it["second_label"])

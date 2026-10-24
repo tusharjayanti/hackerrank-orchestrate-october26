@@ -27,5 +27,7 @@ def test_a_failing_case_still_gets_a_flagged_row(tmp_path, monkeypatch):
     assert [d.case_id for d in decisions] == ["case_01", "case_02", "case_03"]
     failed = decisions[1]
     assert failed.status.value == "COMPLETE" and failed.steps == ()
-    assert "NEEDS_REVIEW" in failed.flags and "ENGINE_ERROR:ValueError" in failed.flags
-    assert json.loads((tmp_path / "case_02.json").read_text())["error"] == "ValueError('boom')"
+    assert failed.fired() == ["ENGINE_ERROR", "NEEDS_REVIEW"]
+    assert any(h.detail == "ValueError" for h in failed.flags)
+    trace = json.loads((tmp_path / "case_02.json").read_text())
+    assert trace["error"] == "ValueError('boom')" and trace["flags_fired"] == ["ENGINE_ERROR", "NEEDS_REVIEW"]

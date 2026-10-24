@@ -69,10 +69,12 @@ class Resolution:
 
 
 class IdentityIndex:
-    def __init__(self, users: dict[str, IdentitySet], reverse: dict[str, str], current_emails: set[str]):
+    def __init__(self, users: dict[str, IdentitySet], reverse: dict[str, str], current_emails: set[str],
+                 ambiguous: frozenset[str] = frozenset()):
         self.users = users
         self._reverse = reverse
         self._current_emails = current_emails
+        self.ambiguous = ambiguous  # normalised identifiers held by several users
 
     @classmethod
     def load(cls, dataset_dir: Path = DATASET_DIR) -> IdentityIndex:
@@ -137,7 +139,8 @@ class IdentityIndex:
             for key in ident.identifiers():
                 owners[key].add(uid)
         reverse: dict[str, str] = {}
-        for key, uids in owners.items():
+        ambiguous = set()
+        for key, uids in sorted(owners.items()):
             if len(uids) == 1:
                 reverse[key] = next(iter(uids))
             else:
@@ -147,12 +150,16 @@ class IdentityIndex:
                 # user who held the identifier at the observation's
                 # captured_at, decided by user_audit_log event_time.
                 log.warning("identifier_ambiguous", identifier_kind=_kind(key), users=sorted(uids))
+                ambiguous.add(key)
         current = {normalize_email(r["email"]) for r in base.values()}
-        return cls(users, reverse, current)
+        return cls(users, reverse, current, frozenset(ambiguous))
 
     def owner_of(self, identifier: str) -> str | None:
         """Reverse map: any identifier seen in evidence -> user_id."""
         return self._reverse.get(normalize_identifier(identifier))
+
+    def is_ambiguous(self, identifier: str) -> bool:
+        return normalize_identifier(identifier) in self.ambiguous
 
     def resolve_email(self, email: str) -> Resolution:
         key = normalize_email(email)

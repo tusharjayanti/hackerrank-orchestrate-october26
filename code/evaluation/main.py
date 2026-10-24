@@ -317,7 +317,7 @@ def suite_custom(args: argparse.Namespace) -> int:
         rows.append({"row": n, "lang_expected": lang, "lang": c.language, "expected": expected,
                      "raw_label": c.raw_label, "label": c.intent.label.value, "confidence": c.intent.confidence,
                      "injection_expected": inj_expected, "injection": c.intent.injection_suspected,
-                     "flags": list(c.flags), "ok": ok_label and ok_inj})
+                     "flags": [f"{h.flag.value}:{h.detail}" for h in c.flags], "ok": ok_label and ok_inj})
         if not ok_label:
             failures.append(f"row {n}: expected {expected}, got {c.intent.label.value} (raw {c.raw_label})")
         if not ok_inj:

@@ -15,7 +15,7 @@ from ..intent import Classified
 from ..linking import CaseContext, Linker
 from ..llm import LLM, credentials_present
 from ..obs import get_logger
-from ..schemas import DataCategory, Decision, DeletionStatus, LinkLayer, RequiredAction
+from ..schemas import DataCategory, Decision, DeletionStatus, Flag, FlagSet, LinkLayer, RequiredAction
 from .policy import load_rules, policy_diff
 from .state import out_of_scope, state_at
 from .steps import build_steps
@@ -66,10 +66,17 @@ def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SI
                 classified: Classified | None = None) -> tuple[Decision, dict]:
     case_id = request["case_id"]
     audit_at = parse_ts(request["audit_at"])
-    flags: list[str] = []
-    trace: dict = {"case_id": case_id, "audit_at": request["audit_at"], "flags": flags}
+    flags = FlagSet()
+    notes: list[str] = []
+    trace: dict = {"case_id": case_id, "audit_at": request["audit_at"], "notes": notes}
+
+    def done(status: DeletionStatus, steps: tuple = ()) -> tuple[Decision, dict]:
+        trace.update(flags.trace())
+        return Decision(case_id=case_id, status=status, steps=tuple(steps), flags=flags.hits), trace
+
+    _run_flags(world, audit_at, flags)
     if classified is not None and not _intent_gate(classified, flags, trace):
-        return Decision(case_id=case_id, status=DeletionStatus.NOT_APPLICABLE, steps=(), flags=tuple(flags)), trace
+        return done(DeletionStatus.NOT_APPLICABLE)
 
     resolution = world.identity.resolve_email(request["email"])
     trace["identity"] = {"user_id": resolution.user_id, "match": resolution.kind.value}
@@ -78,27 +85,48 @@ def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SI
         # row is COMPLETE with no steps and marked for review (no invented
         # finding, no missing row).
         log.warning("case_identity_unresolved", case_id=case_id)
-        flags.extend(["IDENTITY_UNRESOLVED", "NEEDS_REVIEW"])
-        return Decision(case_id=case_id, status=DeletionStatus.COMPLETE, steps=(), flags=tuple(flags)), trace
+        flags.add(Flag.AMBIGUOUS_IDENTIFIER if world.identity.is_ambiguous(request["email"])
+                  else Flag.UNRESOLVED_IDENTITY, request["case_id"])
+        flags.add(Flag.NEEDS_REVIEW, "no subject")
+        return done(DeletionStatus.COMPLETE)
 
-    resources = _scoped_resources(world, request, resolution.user_id, max_layer, flags, trace)
-    treatments = policy_diff(resources, world.rules)
+    resources = _scoped_resources(world, request, resolution.user_id, max_layer, flags, notes, trace)
+    treatments, unmapped = policy_diff(resources, world.rules)
+    for u in unmapped:
+        flags.add(Flag.UNMAPPED_CATEGORY, u)
     trace["treatments"] = [_treatment_trace(t) for t in treatments]
     status, steps = build_steps(treatments)
     if not treatments:
-        flags.append("NO_RESOURCES")
+        notes.append("no resource with a policy treatment")
     if status is DeletionStatus.COMPLETE and any(t.state is None for t in treatments):
-        flags.append("UNVERIFIABLE_RESOURCE")
+        notes.append("linked resource without citable state left out of COMPLETE verification")
     if status is DeletionStatus.COMPLETE and not steps:
         # Agreed fallback: nothing citable was found and no finding is
         # invented; the row is COMPLETE with no steps and marked for review.
-        flags.append("NEEDS_REVIEW")
-    trace["observations"] = [o.model_dump(mode="json")
-                             for o in world.table.case_observations(resolution.user_id, audit_at)]
-    return Decision(case_id=case_id, status=status, steps=tuple(steps), flags=tuple(flags)), trace
+        flags.add(Flag.NEEDS_REVIEW, "no evidence-backed step")
+    case_obs = world.table.case_observations(resolution.user_id, audit_at)
+    for o in case_obs:
+        if o.source_detail == "png:disagreed":
+            flags.add(Flag.VISION_DISAGREED, f"{o.file_id}:{o.resource_id}")
+    trace["observations"] = [o.model_dump(mode="json") for o in case_obs]
+    return done(status, steps)
 
 
-def _intent_gate(classified: Classified, flags: list[str], trace: dict) -> bool:
+def _run_flags(world: World, audit_at, flags: FlagSet) -> None:
+    """Conditions of the run that weaken any case audited after them."""
+    for st in world.table.stats:
+        f = world.manifest.by_id.get(st.file_id)
+        if f is None or f.captured_at > audit_at:
+            continue
+        if st.status == "failed":
+            flags.add(Flag.PARSE_FAILED, st.file_id)
+        elif st.status == "deferred" and st.format == "png":
+            flags.add(Flag.VISION_UNAVAILABLE, st.file_id)
+    if world.llm is not None and world.llm.budget.tripped:
+        flags.add(Flag.BUDGET_BREACHED)
+
+
+def _intent_gate(classified: Classified, flags: FlagSet, trace: dict) -> bool:
     """Record the intent; True when the request authorizes deletion."""
     flags.extend(classified.flags)
     trace["intent"] = {"label": classified.intent.label.value, "raw_label": classified.raw_label,
@@ -107,18 +135,20 @@ def _intent_gate(classified: Classified, flags: list[str], trace: dict) -> bool:
     return classified.intent.authorizes_deletion
 
 
-def _scoped_resources(world: World, request: dict, uid: str, max_layer: LinkLayer, flags: list[str],
-                      trace: dict) -> list[tuple]:
+def _scoped_resources(world: World, request: dict, uid: str, max_layer: LinkLayer, flags: FlagSet,
+                      notes: list[str], trace: dict) -> list[tuple]:
     """Linked resources in this request's scope, each with its state at audit_at."""
     requested_at, audit_at = parse_ts(request["requested_at"]), parse_ts(request["audit_at"])
     links = world.linker.links(case_context(world.identity, request), max_layer)
     trace["links"] = [lk.model_dump(mode="json") for lk in sorted(links.values(),
                                                                    key=lambda x: (x.system_id, x.resource_id))]
-    flags.extend(f"VISION_ONLY_PENDING:{o.file_id}:{o.resource_id}" for o in world.table.held_for_user(uid, audit_at))
-    flags.extend(f"INFERRED_LINK_L{int(lk.layer)}:{lk.resource_id}" for lk in links.values()
-                 if lk.layer >= LinkLayer.PROXIMITY)
+    for o in world.table.held_for_user(uid, audit_at):
+        flags.add(Flag.VISION_ONLY_PENDING, f"{o.file_id}:{o.resource_id}")
+    notes.extend(f"inferred link L{int(lk.layer)} {lk.resource_id} via {lk.source_id}"
+                 for lk in sorted(links.values(), key=lambda x: x.resource_id) if lk.layer >= LinkLayer.PROXIMITY)
     resources = []
     trace["out_of_scope"] = []
+    trace["state_conflicts"] = []
     for res in sorted(links):
         if out_of_scope(res, world.table, requested_at, audit_at, links[res].linked_at):
             trace["out_of_scope"].append(f"{res[0]}/{res[1]}")
@@ -127,7 +157,7 @@ def _scoped_resources(world: World, request: dict, uid: str, max_layer: LinkLaye
         category = st.data_category if st and st.data_category else category_for(res[0])
         resources.append((res[0], res[1], category, st))
         if st and st.conflicting:
-            flags.append(f"STATE_CONFLICT:{res[1]}")
+            trace["state_conflicts"].append(f"{res[0]}/{res[1]}")
     return resources
 
 

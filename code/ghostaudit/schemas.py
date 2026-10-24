@@ -340,11 +340,76 @@ def serialize_steps(steps: list[Step]) -> str:
                       ensure_ascii=False)
 
 
+class Flag(StrEnum):
+    """Every condition that marks a row for attention. A trace records each
+    flag that fired with its detail; nothing else is a flag."""
+
+    UNRESOLVED_IDENTITY = "UNRESOLVED_IDENTITY"  # request email matches no user
+    AMBIGUOUS_IDENTIFIER = "AMBIGUOUS_IDENTIFIER"  # request email belongs to several users
+    PARSE_FAILED = "PARSE_FAILED"  # an evidence file available at audit_at could not be parsed
+    UNMAPPED_CATEGORY = "UNMAPPED_CATEGORY"  # a linked resource has no deletion rule
+    INTENT_REVIEW = "INTENT_REVIEW"  # intent had low confidence (detail says how it was settled)
+    INTENT_UNAVAILABLE = "INTENT_UNAVAILABLE"  # intent not classified; audited as a deletion
+    INJECTION_SUSPECTED = "INJECTION_SUSPECTED"  # request text carries processing instructions
+    VISION_DISAGREED = "VISION_DISAGREED"  # no two screenshot readings agreed for a used row
+    VISION_ONLY_PENDING = "VISION_ONLY_PENDING"  # screenshot row nothing else knows, held for the agent
+    VISION_UNAVAILABLE = "VISION_UNAVAILABLE"  # a screenshot available at audit_at was not read
+    BUDGET_BREACHED = "BUDGET_BREACHED"  # model call/spend budget reached during the run
+    AGENT_INVOKED = "AGENT_INVOKED"
+    AGENT_MAX_TURNS = "AGENT_MAX_TURNS"
+    AGENT_REJECTED_SUBMISSION = "AGENT_REJECTED_SUBMISSION"
+    AGENT_UNAVAILABLE = "AGENT_UNAVAILABLE"
+    CONTRACT_REPAIRED = "CONTRACT_REPAIRED"
+    COMPLETE_DOWNGRADED = "COMPLETE_DOWNGRADED"
+    SHARED_ATTACHMENT = "SHARED_ATTACHMENT"
+    ENGINE_ERROR = "ENGINE_ERROR"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
+class FlagHit(_Frozen):
+    flag: Flag
+    detail: str = ""
+
+
+class FlagSet:
+    """Flags raised while deciding one case, deduplicated, in firing order."""
+
+    def __init__(self, hits: tuple[FlagHit, ...] = ()):
+        self._hits: list[FlagHit] = list(hits)
+
+    def add(self, flag: Flag, detail: str = "") -> None:
+        hit = FlagHit(flag=flag, detail=detail)
+        if hit not in self._hits:
+            self._hits.append(hit)
+
+    def extend(self, hits) -> None:
+        for h in hits:
+            self.add(h.flag, h.detail)
+
+    def __contains__(self, flag: Flag) -> bool:
+        return any(h.flag is flag for h in self._hits)
+
+    @property
+    def hits(self) -> tuple[FlagHit, ...]:
+        return tuple(self._hits)
+
+    def fired(self) -> list[str]:
+        order = list(Flag)
+        return [f.value for f in sorted({h.flag for h in self._hits}, key=order.index)]
+
+    def trace(self) -> dict:
+        return {"flags_fired": self.fired(),
+                "flag_details": [{"flag": h.flag.value, "detail": h.detail} for h in self._hits]}
+
+
 class Decision(_Frozen):
     case_id: str
     status: DeletionStatus
     steps: tuple[Step, ...]
-    flags: tuple[str, ...] = ()
+    flags: tuple[FlagHit, ...] = ()
+
+    def fired(self) -> list[str]:
+        return FlagSet(self.flags).fired()
 
     def to_row(self) -> dict[str, str]:
         return {

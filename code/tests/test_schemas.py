@@ -83,3 +83,22 @@ def test_serialization_matches_sample_format():
 def test_case_sort_is_natural():
     ids = ["case_100", "case_33", "case_9", "case_550"]
     assert sorted(ids, key=case_sort_key) == ["case_9", "case_33", "case_100", "case_550"]
+
+
+def test_flag_enum_is_the_agreed_list():
+    from ghostaudit.schemas import Flag
+    assert [f.value for f in Flag] == [
+        "UNRESOLVED_IDENTITY", "AMBIGUOUS_IDENTIFIER", "PARSE_FAILED", "UNMAPPED_CATEGORY", "INTENT_REVIEW",
+        "INTENT_UNAVAILABLE", "INJECTION_SUSPECTED", "VISION_DISAGREED", "VISION_ONLY_PENDING",
+        "VISION_UNAVAILABLE", "BUDGET_BREACHED", "AGENT_INVOKED", "AGENT_MAX_TURNS", "AGENT_REJECTED_SUBMISSION",
+        "AGENT_UNAVAILABLE", "CONTRACT_REPAIRED", "COMPLETE_DOWNGRADED", "SHARED_ATTACHMENT", "ENGINE_ERROR",
+        "NEEDS_REVIEW"]
+
+
+def test_flagset_dedupes_and_orders_by_enum():
+    from ghostaudit.schemas import Flag, FlagSet
+    fs = FlagSet()
+    fs.add(Flag.NEEDS_REVIEW, "x")
+    fs.add(Flag.INTENT_REVIEW, "y")
+    fs.add(Flag.NEEDS_REVIEW, "x")
+    assert fs.fired() == ["INTENT_REVIEW", "NEEDS_REVIEW"] and len(fs.hits) == 2

@@ -106,7 +106,8 @@ def list_observations(world: World, inp: ListObservationsInput) -> dict:
     held = [o.model_dump(mode="json") for o in world.table.held_for_user(ctx.user_id, ctx.audit_at)] if ctx else []
     return {"identity": trace.get("identity"), "links": trace.get("links", []),
             "observations": trace.get("observations", []), "treatments": trace.get("treatments", []),
-            "held_vision_only": held, "flags": trace.get("flags", [])}
+            "held_vision_only": held, "flags_fired": trace.get("flags_fired", []),
+            "flag_details": trace.get("flag_details", [])}
 
 
 def read_evidence_file(world: World, inp: ReadEvidenceFileInput) -> dict:
