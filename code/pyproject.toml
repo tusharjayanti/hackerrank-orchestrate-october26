@@ -1,0 +1,20 @@
+[project]
+name = "ghostaudit"
+version = "0.1.0"
+description = "Deletion-audit agent for HackerRank Orchestrate: Ghost Data Still Exists"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.7,<3",
+    "anthropic>=0.40",
+    "structlog>=24.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
