@@ -4,12 +4,14 @@
     python code/main.py --mode tune        # same cases -> code/runs/tune/output.csv
     python code/main.py --mode tune --requests dataset/sample_deletion_requests.csv --out code/runs/tune/sample_output.csv
 
-Every run gets a run id (UTC time + git commit). A run writes one trace per
-case and a run manifest with the commit, models, flags and model usage; model
-answers are replayed from the on-disk cache when the same request was asked
-before. Without model credentials (or with GHOSTAUDIT_OFFLINE=1) screenshots
-are deferred and intent is not classified: every request is audited as a
-deletion and flagged.
+Every run gets a run id (UTC time + request file + git commit). A run writes
+one trace per case and a run manifest with the commit, models, flags,
+model-access mode, budget state and model usage. Model answers are replayed
+from the on-disk cache when the same request was asked before. With no key
+but a cache, only cached answers are used (replay); with neither, or with
+GHOSTAUDIT_OFFLINE=1, screenshots are deferred, intent is not classified
+(every request is audited as a deletion) and the agent does not run, each
+with its flag. Every case always gets a row.
 """
 
 from __future__ import annotations

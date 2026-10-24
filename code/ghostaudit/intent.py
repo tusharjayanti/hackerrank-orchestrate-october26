@@ -56,7 +56,7 @@ def classify(texts: list[str], llm: LLM | None) -> dict[str, Classified]:
             items = {it["index"]: it for it in res.get("items", [])}
         except (LLMUnavailable, LLMExtractionFailed) as e:
             # Fallback: the batch has no answer; every text in it is audited as
-            # a deletion and flagged INTENT_MISSING below.
+            # a deletion and flagged INTENT_UNAVAILABLE below.
             log.error("intent_batch_failed", batch=start // BATCH_SIZE, error=str(e))
             items = {}
         for i, text in enumerate(batch):
