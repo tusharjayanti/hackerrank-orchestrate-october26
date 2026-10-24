@@ -1,9 +1,9 @@
-# Usage report — measure run `20261024T194721Z-deletion-requests-24896fd`
+# Usage report — measure run `20261024T205342Z-deletion-requests-8ed4ab2`
 
 | | |
 |---|---|
-| Run id | `20261024T194721Z-deletion-requests-24896fd` |
-| Commit | `24896fd` (clean tree) |
+| Run id | `20261024T205342Z-deletion-requests-8ed4ab2` |
+| Commit | `8ed4ab2` (clean tree) |
 | Command | `ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= MODEL_VISION=claude-sonnet-5-5 MODEL_INTENT=claude-sonnet-5-5 MODEL_AGENT=claude-opus-5-5 .venv/bin/python code/main.py --mode measure` |
 | Output | `output.csv`, 518 rows, sha256 `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea` |
 | Model access | `replay` (replay: cached answers only; a miss is flagged, never called) |
@@ -25,22 +25,22 @@ What the same run costs with an empty cache (each call priced at the list price 
 
 | Model | Stage | Calls | Input tokens | Output tokens | USD |
 |---|---|---|---|---|---|
-| `claude-opus-5-5` | investigator agent | 19 | 125,968 | 3,140 | 0.5667 |
+| `claude-opus-5-5` | investigator agent | 20 | 141,680 | 3,606 | 0.6388 |
 | `claude-sonnet-5-5` | intent | 15 | 50,897 | 17,033 | 0.2721 |
 | `claude-sonnet-5-5` | vision (screenshots) | 22 | 92,826 | 4,924 | 0.2349 |
 
 | Model | Calls | Input tokens | Output tokens | USD | $/MTok in / out |
 |---|---|---|---|---|---|
-| `claude-opus-5-5` | 19 | 125,968 | 3,140 | 0.5667 | 4.00 / 20.00 |
+| `claude-opus-5-5` | 20 | 141,680 | 3,606 | 0.6388 | 4.00 / 20.00 |
 | `claude-sonnet-5-5` | 37 | 143,723 | 21,957 | 0.5070 | 2.00 / 10.00 |
-| **Overall** | 56 | 269,691 | 25,097 | 1.0737 | |
+| **Overall** | 57 | 285,403 | 25,563 | 1.1459 | |
 
 | Per request (over all 518 requests) | Value |
 |---|---|
-| Model calls | 0.108 |
-| Total tokens | 569.1 (input 520.6, output 48.4) |
-| Cost | $0.00207 |
+| Model calls | 0.110 |
+| Total tokens | 600.3 (input 551.0, output 49.3) |
+| Cost | $0.00221 |
 
-Total tokens across the run: 294,788. Estimated total cost of a cold run: $1.0737.
+Total tokens across the run: 310,966. Estimated total cost of a cold run: $1.1459.
 
 Notes: vision calls read the 11 screenshots twice each (Sonnet); intent classifies the unique request texts 25 per call (Sonnet); the agent runs only on gated cases, up to six Opus turns each. PDFs and every text format are parsed without a model.

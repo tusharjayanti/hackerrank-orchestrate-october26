@@ -171,7 +171,7 @@ a run with an empty cache — from `code/evaluation/usage_report.md`:
 | `claude-sonnet-5-5` | vision (11 screenshots × 2 readings) | 22 | 92,826 | 4,924 | 0.2349 |
 | `claude-sonnet-5-5` | intent (375 unique texts, 25 per call) | 15 | 50,897 | 17,033 | 0.2721 |
 | `claude-opus-5-5` | investigator agent (6 gated cases) | 20 | 141,680 | 3,606 | 0.6388 |
-| **Total** | | **57** | 285,403 | 25,563 | **1.1458** |
+| **Total** | | **57** | 285,403 | 25,563 | **1.1459** |
 | Per request (518) | | 0.11 | 551 | 49 | 0.0022 |
 
 The model cache (`code/.cache/`) is not shipped, so a run from `code.zip`
@@ -266,7 +266,7 @@ Behaviours a reviewer might not find from the sections above:
 ## Reproducibility
 
 - The submitted `output.csv` comes from run
-  `20261024T194721Z-deletion-requests-24896fd` at commit `24896fd`, sha256
+  `20261024T205342Z-deletion-requests-8ed4ab2` at commit `8ed4ab2`, sha256
   `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea`, made
   with the configuration locked and the cache replayed:
   `ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= MODEL_VISION=claude-sonnet-5-5 MODEL_INTENT=claude-sonnet-5-5 MODEL_AGENT=claude-opus-5-5 .venv/bin/python code/main.py --mode measure`

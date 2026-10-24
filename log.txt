@@ -280,3 +280,25 @@ branch=main
 repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=Claude Code (main session)
+## [2026-10-24T20:55:40Z] Design brief, diagrams, fresh code-judge review and reconciliation
+
+User Prompt (verbatim, secrets redacted):
+[User message, condensed for length] Rewrite code/DESIGN.md as the design brief from log.txt decisions and the code only (problem, extract-then-reason principle, Observation schema, layers, linking ladder with numbers and joint L5/L6 solving, engine with ordering and scope rules, agent with gate/tools/turn bound/monotone story, guards and the downgrade-only asymmetry, failure handling, evaluation design, decisions log, known limitations). Check code/docs/system_design.svg and agent_anatomy.svg against the code, fix labels in the SVG, report anything needing redraw, embed with text versions in README and DESIGN, track both; commit "docs: design brief and diagrams". Then rebuild code.zip, unzip it, and run a fresh context-free subagent as code judge (rubric 30/30/25/15, .py and .md only) for two lists and six answers; bring them verbatim; fix list one (documents for numbers/setup/descriptions, code plus tests for safety gaps), re-run measure from cache and confirm sha256 b43ff703...; add list-two items to the README; make anything the reader could not find findable; commit "docs: readme and reports reconciled against code by fresh review"; rebuild the zip, re-run the fresh-clone check, report the final code.zip hash, then stop.
+
+Agent Response Summary:
+Rewrote DESIGN.md from the code and the log; corrected 11 diagram labels in place (ladder precision claim, state_at rule, monotone submit, structlog/llm.py/replay lines, intent languages, candidates, prompt section names, parsers) and listed the boxes that need redrawing; embedded both diagrams with text versions; committed cb7c878. A fresh context-free reviewer read the zip and returned 22 list-one items, 25 list-two items and six answers. Three were real safety gaps fixed in code with 7 tests: an injection-flagged non-deletion is now audited as a deletion; apply_policy refuses records the parsers already extracted and requires a subject identifier within 15 lines; intent failure, world-load failure and damaged cache entries no longer cost any row. Harness gaps were closed so documented numbers reproduce (--enable-sibling for L6, the privacy-intake cross-check in --suite custom, the samples dump finds its traces); all other items were fixed in the documents, list-two behaviours added as README reliability notes, and a where-to-look table added. Agent answers were re-recorded live after the tool-schema text changed ($0.64 eval, $0.21 samples); measure from cache at clean commit 8ed4ab2 reproduces sha256 b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea with unchanged flags; all six suites pass with 0 live calls.
+
+Actions:
+* Rewrote code/DESIGN.md; edited code/docs/system_design.svg and agent_anatomy.svg; edited README.md, code/evaluation/evaluation_report.md, code/evaluation/usage_report.md
+* Edited code/ghostaudit/intent.py, llm.py, linking.py, agent/tools.py, code/main.py, code/evaluation/main.py; added code/tests/test_review_gaps.py; updated code/tests/test_agent_monotone.py
+* Launched one fresh subagent (code judge) on the unzipped code.zip
+* git commit cb7c878, 8ed4ab2; tune runs to refresh agent answers; measure runs at 8ed4ab2; all six suites; pytest 127 passed
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

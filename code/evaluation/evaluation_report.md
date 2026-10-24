@@ -5,16 +5,16 @@ All numbers come from the harness in `code/evaluation/main.py` run against the
 requests. Each change was adopted only if no sample metric regressed and every
 contract check still passed.
 
-Final numbers come from the measure run at commit `24896fd` (clean tree),
+Final numbers come from the measure run at commit `8ed4ab2` (clean tree),
 replaying every model answer from the cache:
 
-- evaluation: run `20261024T194721Z-deletion-requests-24896fd`, `output.csv`
+- evaluation: run `20261024T205342Z-deletion-requests-8ed4ab2`, `output.csv`
   sha256 `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea`
-- samples: run `20261024T194759Z-sample-deletion-requests-24896fd`
+- samples: run `20261024T205443Z-sample-deletion-requests-8ed4ab2`
 - every suite below was run on those outputs with `--mode measure`; 0 live
   model calls during the suites. Model usage is in `usage_report.md`.
 
-## 1. Samples suite (32 cases, run `20261024T194759Z-sample-deletion-requests-24896fd`)
+## 1. Samples suite (32 cases, run `20261024T205443Z-sample-deletion-requests-8ed4ab2`)
 
 | Metric | Value |
 |---|---|
@@ -287,7 +287,7 @@ Status / step precision / step recall unless noted.
 | 16 | Investigator agent (L2) merged with free choice between engine candidates: on the 9 gated cases it chose a less-safe reading on 4 — `fact_links_only` on samples 01 and 02 (dropping an L5 link measured at 1.000), the ABSENT side of a same-file conflict on 135 and 383 — and the guards reverted all 4 (contract regeneration on 01/02, COMPLETE downgrade on 135/383) | action space restricted to monotone: a candidate must keep every engine finding and resource and never turn INCOMPLETE into COMPLETE; `fact_links_only`, scope-off and L6 candidates removed; a conflict offers only its safer side; the agent adds a candidate only via `apply_policy` on a verified record the parsers missed | 4 wrong choices, 4 guard reverts (`CONTRACT_REPAIRED` ×2 samples, `COMPLETE_DOWNGRADED` ×2) | 0 wrong choices, 0 reverts; the 4 cases have no admissible alternative; output byte-identical |
 | 17 | A fresh review (a context-free reader of the zip) found three documented safety behaviours the code did not have: an injection-flagged request could still be closed as NOT_APPLICABLE; `apply_policy` accepted a record the parsers had already extracted and an identifier anywhere in the file; the per-case wrapper did not cover intent classification, world loading or a damaged cache entry | a non-deletion label on an injection-flagged request is audited as a deletion; `apply_policy` refuses records the parsers extracted from that file and needs a subject identifier within 15 lines of the id; intent failure audits every request, world-load failure writes every row and exits 1, a damaged cache entry is a miss; 7 tests in `tests/test_review_gaps.py` | output sha256 `b43ff703…afff7ea` | unchanged `b43ff703…afff7ea`; flags unchanged |
 
-## 6.1 Flags (518 evaluation cases, measure run `20261024T194721Z-deletion-requests-24896fd`)
+## 6.1 Flags (518 evaluation cases, measure run `20261024T205342Z-deletion-requests-8ed4ab2`)
 
 | Flag | Cases | Meaning |
 |---|---|---|
@@ -348,8 +348,10 @@ then replayed by the measure run:
 | case_383 | state conflict (account_5043) | 2 | list_observations, submit_decision | engine_default | engine_default | 10,862 / 365 | 0.0507 |
 | case_390 | state conflict (account_7618) | 3 | list_observations, read_evidence_file, submit_decision | engine_default, conflict …:PRESENT | engine_default | 30,310 / 508 | 0.1314 |
 
-On the samples (run before that fix, same constraint): case_01 4 turns,
-case_02 3, case_04 3, each choosing engine_default; no guard intervened.
+On the samples (re-recorded after the same fix): case_01, case_02 and
+case_04 each took 3 turns (list_observations, search_raw_evidence, and on
+01/02 read_evidence_file, then submit_decision) and chose engine_default; no
+guard intervened.
 
 | | Before (free choice) | After (monotone) |
 |---|---|---|
@@ -397,10 +399,10 @@ score.
 
 | | |
 |---|---|
-| Commit | `24896fd` (clean tree) |
+| Commit | `8ed4ab2` (clean tree) |
 | Command | `ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= MODEL_VISION=claude-sonnet-5-5 MODEL_INTENT=claude-sonnet-5-5 MODEL_AGENT=claude-opus-5-5 .venv/bin/python code/main.py --mode measure` |
-| Evaluation run | `20261024T194721Z-deletion-requests-24896fd`, 518 rows, sha256 `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea` |
-| Samples run | `20261024T194759Z-sample-deletion-requests-24896fd` (same command with `--requests dataset/sample_deletion_requests.csv --out code/runs/measure/sample_output.csv`) |
+| Evaluation run | `20261024T205342Z-deletion-requests-8ed4ab2`, 518 rows, sha256 `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea` |
+| Samples run | `20261024T205443Z-sample-deletion-requests-8ed4ab2` (same command with `--requests dataset/sample_deletion_requests.csv --out code/runs/measure/sample_output.csv`) |
 | Model access | replay: credentials blanked, every answer from the content-keyed cache (43 hits, 0 live calls); a cache miss would be flagged, never called |
 | Prompts | `vision-v2`, `intent-v4`, `agent-v2` |
 | Models | `claude-sonnet-5-5` (vision, intent), `claude-opus-5-5` (agent, vision tiebreak) |
