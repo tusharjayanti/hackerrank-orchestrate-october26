@@ -285,8 +285,8 @@ Behaviours a reviewer might not find from the sections above:
 ## Reproducibility
 
 - The submitted `output.csv` comes from run
-  `20261024T205342Z-deletion-requests-8ed4ab2` at commit `8ed4ab2`, sha256
-  `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea`, made
+  `20261024T213121Z-deletion-requests-afc3e20` at commit `afc3e20`, sha256
+  `32c89163251480b144a68a27566ba7d1c927366a3980cf2431d6f9324ab81817`, made
   with the configuration locked and the cache replayed:
   `ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= MODEL_VISION=claude-sonnet-5-5 MODEL_INTENT=claude-sonnet-5-5 MODEL_AGENT=claude-opus-5-5 .venv/bin/python code/main.py --mode measure`
   (measure mode now refuses live calls by itself, so plain

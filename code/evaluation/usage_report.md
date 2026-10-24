@@ -1,15 +1,15 @@
-# Usage report — measure run `20261024T205342Z-deletion-requests-8ed4ab2`
+# Usage report — measure run `20261024T213121Z-deletion-requests-afc3e20`
 
 | | |
 |---|---|
-| Run id | `20261024T205342Z-deletion-requests-8ed4ab2` |
-| Commit | `8ed4ab2` (clean tree) |
+| Run id | `20261024T213121Z-deletion-requests-afc3e20` |
+| Commit | `afc3e20` (clean tree) |
 | Command | `ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= MODEL_VISION=claude-sonnet-5-5 MODEL_INTENT=claude-sonnet-5-5 MODEL_AGENT=claude-opus-5-5 .venv/bin/python code/main.py --mode measure` |
-| Output | `output.csv`, 518 rows, sha256 `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea` |
+| Output | `output.csv`, 518 rows, sha256 `32c89163251480b144a68a27566ba7d1c927366a3980cf2431d6f9324ab81817` |
 | Model access | `replay` (replay: cached answers only; a miss is flagged, never called) |
 | Models | vision `claude-sonnet-5-5`, intent `claude-sonnet-5-5`, agent and vision tiebreak `claude-opus-5-5` |
 | Budget breaker | max 200 calls / $10.00; tripped: no |
-| Status mix | {'COMPLETE': 154, 'INCOMPLETE': 354, 'NOT_APPLICABLE': 10} |
+| Status mix | {'COMPLETE': 152, 'INCOMPLETE': 356, 'NOT_APPLICABLE': 10} |
 
 ## 1. This run
 

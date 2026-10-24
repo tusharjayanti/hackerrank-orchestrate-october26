@@ -367,3 +367,23 @@ branch=main
 repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-25T06:05:00Z] Final measure run, usage report and numbers
+
+User Prompt (verbatim, secrets redacted):
+(continuation) Then regenerate the usage report and every number in the README and reports from the final run, commit, rebuild the zip, fresh-clone check, final hashes for both files.
+
+Agent Response Summary:
+Final measure run 20261024T213121Z-deletion-requests-afc3e20 (clean tree, replay only, 43 cache hits, 0 live calls) wrote output.csv sha256 32c89163...1817, identical to the fail-closed run; samples run 20261024T213121Z-sample-deletion-requests-afc3e20 at 1.000/1.000/0.912. All six suites re-run in measure mode (contract: only the known case_61 complete_empty; complete-check 151/152 re-derived, 0 refuted). usage_report.md regenerated (cold cost unchanged: 57 calls, $1.1459); run ids, sha256, status mix 152/356/10 and re-derivation counts updated in README and the evaluation report; change-log rows keep their historical values.
+
+Actions:
+* Ran code/main.py --mode measure (evaluation and samples), code/evaluation/main.py for six suites, code/evaluation/usage.py
+* Edited README.md, code/evaluation/evaluation_report.md, code/evaluation/usage_report.md
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
