@@ -32,3 +32,26 @@ repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T15:59:04Z] Commit gate; build records, SQL, log parsers and coverage suite
+
+User Prompt (verbatim, secrets redacted):
+[User message, condensed for length] Gate confirmed; keep test_harness.py and the two extra contract checks. Decisions: pure sort is authoritative (no carve-out); keep natural case sort and note lexicographic alternative in DESIGN.md; shared identifiers -> neither user, leave TODO for "owner at captured_at via audit_log event_time". Commit now: one-line conventional commit, no trailers: "feat: schemas, contract and sample suites, identity index, manifest". Next: parsers in order parse_records (handover TXT + JSON shapes), parse_sql, parse_logs; vision last. After EACH parser run --suite coverage (implement it) and report files parsed/failed/rows per format and how many of 32 samples have >=1 observation from the cited file; run samples in observations-only mode; show mismatch dump for cases whose cited file parsed but produced no observation for the user. Hypotheses: (1) service_resource_export 200 with customer_reference but null PII is a tombstone (samples 31, 32); (2) SQL replica-only row yields separate observation, replica one is the finding (sample 05); (3) logs join by trace_id, orphan traces yield nothing; count orphans in evidence_01. Stop after the three text parsers and show coverage before vision.
+
+Agent Response Summary:
+Added the TODO and code/DESIGN.md, committed e8e6345 with the exact message and no trailers. Built ingest/observations.py (shared classifier, Coverage for absence-by-omission, observation table with identifier-linked resource closure), parse_records.py, parse_sql.py, parse_logs.py, the coverage suite and samples --observations-only. Stage results for samples with an observation for the user from the cited file: records 15/32, +SQL 20/32, +logs 28/32; all 79 text files parse, 0 failed, 0 ownership conflicts; gold resource recall 75/111 at precision 75/76. Hypothesis 1 refuted (the tombstones come from the snapshot bundle's identity_service collection), hypothesis 2 holds but the output system_id is the logical account_service with the table in source_detail, hypothesis 3 gives 0 orphan traces in evidence_01. Main finding: 36 gold resources cannot be linked by identifiers (14 appear only in system_activity, 13 only via post-audit_at evidence, 5 have identifier-free records, 4 appear nowhere in the text data); stopped before vision as instructed.
+
+Actions:
+* Edited code/ghostaudit/identity.py (TODO), created code/DESIGN.md; git commit e8e6345
+* Edited code/ghostaudit/schemas.py (DATA_FLOW category, Coverage model, Observation.identifiers tuple)
+* Created code/ghostaudit/ingest/{observations,parse_records,parse_sql,parse_logs}.py
+* Edited code/evaluation/main.py (coverage suite, --observations-only, --formats); edited code/tests/test_harness.py; created code/tests/test_ingest.py
+* Ran coverage/samples suites per stage (reports under code/runs/tune/stages/), pytest 42 passed
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

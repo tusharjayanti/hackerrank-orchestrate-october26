@@ -43,5 +43,5 @@ def test_samples_detects_perturbation(tmp_path):
 
 
 def test_stub_suites_fail_loudly():
-    for suite in ("coverage", "custom", "metamorphic", "complete-check"):
+    for suite in ("custom", "metamorphic", "complete-check"):
         assert main(["--suite", suite]) == 2

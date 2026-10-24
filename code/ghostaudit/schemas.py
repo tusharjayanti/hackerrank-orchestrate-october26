@@ -91,6 +91,9 @@ class DataCategory(StrEnum):
     LEGAL_HOLD_RECORD = "LEGAL_HOLD_RECORD"
     BACKUP_ARCHIVE = "BACKUP_ARCHIVE"
     ACCOUNT_TOMBSTONE = "ACCOUNT_TOMBSTONE"
+    # Not a deletion_rules.csv category: connectors are judged by whether they
+    # are ACTIVE or DISABLED, not by a record-level action.
+    DATA_FLOW = "DATA_FLOW"
 
 
 class RequiredAction(StrEnum):
@@ -167,9 +170,21 @@ class Observation(_Frozen):
     resource_id: str
     data_category: DataCategory | None
     state: ObservedState
-    identifier_seen: str
+    identifiers: tuple[str, ...]
     source_detail: str
     vision: bool = False
+
+
+class Coverage(_Frozen):
+    """A snapshot that lists a system's records completely, so a resource of
+    that system missing from it was absent at observed_at."""
+
+    file_id: str
+    captured_at: datetime
+    observed_at: datetime
+    system_id: str
+    source_detail: str
+    resource_ids: frozenset[str]
 
 
 class IdentitySet(_Frozen):

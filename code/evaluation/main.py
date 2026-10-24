@@ -20,7 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
 from ghostaudit.guards import check_output, load_requests  # noqa: E402
-from ghostaudit.ingest.manifest import CitationRegistry  # noqa: E402
+from ghostaudit.identity import IdentityIndex  # noqa: E402
+from ghostaudit.ingest.manifest import CitationRegistry, Manifest, parse_ts  # noqa: E402
+from ghostaudit.ingest.observations import build_table  # noqa: E402
 from ghostaudit.schemas import OPERATION_ORDER, DeletionStatus, case_sort_key  # noqa: E402
 
 STEP_KEY_FIELDS = ("phase", "operation", "state", "system_id", "resource_id", "evidence_id")
@@ -228,6 +230,197 @@ def suite_samples(args: argparse.Namespace) -> int:
     return 0 if perfect else 1
 
 
+# ---------------------------------------------------------------- shared world
+
+def _formats(args: argparse.Namespace) -> set[str] | None:
+    return set(args.formats.split(",")) if args.formats else None
+
+
+def _world(args: argparse.Namespace):
+    dataset = Path(args.dataset)
+    identity = IdentityIndex.load(dataset)
+    manifest = Manifest.load(dataset)
+    table = build_table(manifest, identity, _formats(args))
+    return identity, manifest, table
+
+
+def _requests(path: Path) -> list[dict]:
+    with open(path, newline="", encoding="utf-8") as f:
+        return sorted(csv.DictReader(f), key=lambda r: case_sort_key(r["case_id"]))
+
+
+def _gold_resources(steps: list[dict]) -> set[tuple[str, str]]:
+    return {(s["system_id"], s["resource_id"]) for s in steps}
+
+
+def _obs_dict(o) -> dict:
+    d = o.model_dump(mode="json")
+    d["identifiers"] = list(o.identifiers)
+    return d
+
+
+# ---------------------------------------------------------------- coverage
+
+def suite_coverage(args: argparse.Namespace) -> int:
+    identity, manifest, table = _world(args)
+    dataset = Path(args.dataset)
+
+    by_format: dict[str, Counter] = defaultdict(Counter)
+    for st in table.stats:
+        c = by_format[st.format]
+        c["files"] += 1
+        c[st.status] += 1
+        c["rows"] += st.rows
+        c["observations"] += st.observations
+        c["coverage"] += st.coverage
+        c["skipped"] += st.skipped
+
+    # Sample cases: does the file the answer cites yield anything for the user?
+    gold = _read_output(Path(args.expected))
+    status_of = {st.file_id: st.status for st in table.stats}
+    sample_rows = []
+    dump = ["# Coverage: sample cases whose cited file yields no observation for the user\n"]
+    for r in _requests(dataset / "sample_deletion_requests.csv"):
+        cid = r["case_id"]
+        audit_at = parse_ts(r["audit_at"])
+        uid = identity.resolve_email(r["email"]).user_id
+        steps = gold.get(cid, ("", []))[1]
+        cited = sorted({s["evidence_id"] for s in steps if s["evidence_id"]})
+        linked = table.user_resources(uid, audit_at) if uid else set()
+        case_obs = table.case_observations(uid, audit_at) if uid else []
+        row = {"case_id": cid, "user_id": uid, "cited": cited, "files": {}}
+        for fid in cited:
+            direct = sum(1 for o in table.by_user.get(uid, ()) if o.file_id == fid)
+            closure = sum(1 for o in case_obs if o.file_id == fid)
+            row["files"][fid] = {"status": status_of.get(fid, "not_evidence_file"), "direct": direct,
+                                 "closure": closure}
+        row["direct_hit"] = any(v["direct"] for v in row["files"].values())
+        row["closure_hit"] = any(v["closure"] for v in row["files"].values())
+        row["cited_parsed"] = any(v["status"] == "parsed" for v in row["files"].values())
+        g = _gold_resources(steps)
+        row["gold_resources"] = len(g)
+        row["gold_linked"] = len(g & linked)
+        sample_rows.append(row)
+        if row["cited_parsed"] and not row["closure_hit"]:
+            dump.append(f"\n## {cid} ({uid}, audit_at {r['audit_at']}) cites {cited}\n")
+            for res in sorted(g):
+                seen = table.by_resource.get(res, [])
+                where = "; ".join(f"{o.file_id}@{o.captured_at:%Y-%m-%d} {o.state} ids={list(o.identifiers)}"
+                                  for o in seen) or "no observation anywhere"
+                dump.append(f"- gold {res[0]}/{res[1]} {'LINKED' if res in linked else 'unlinked'}: {where}")
+
+    # All evaluation cases.
+    kinds = Counter()
+    zero = []
+    obs_hist = Counter()
+    per_case = []
+    for r in _requests(Path(args.requests)):
+        audit_at = parse_ts(r["audit_at"])
+        res = identity.resolve_email(r["email"])
+        kinds[res.kind.value] += 1
+        obs = table.case_observations(res.user_id, audit_at) if res.user_id else []
+        if not obs:
+            zero.append(r["case_id"])
+        obs_hist[min(len(obs), 10)] += 1
+        per_case.append({"case_id": r["case_id"], "identity": res.kind.value, "observations": len(obs),
+                         "files": sorted({o.file_id for o in obs}),
+                         "resources": sorted({f"{o.system_id}/{o.resource_id}" for o in obs})})
+
+    conflicts = {}
+    for res, obs in table.by_resource.items():
+        owners = set().union(*(table.owners(o) for o in obs)) if obs else set()
+        if len(owners) > 1:
+            conflicts[f"{res[0]}/{res[1]}"] = sorted(owners)
+
+    report = {
+        "suite": "coverage", "formats_enabled": args.formats or "all",
+        "by_format": {k: dict(v) for k, v in sorted(by_format.items())},
+        "files": [st.__dict__ for st in table.stats],
+        "samples": sample_rows,
+        "identity": dict(kinds), "zero_observation_cases": zero,
+        "observation_histogram": {str(k): v for k, v in sorted(obs_hist.items())},
+        "owner_conflicts": conflicts, "per_case": per_case,
+    }
+    _write_report(args, "coverage", report)
+    dump_path = _out_dir(args) / "coverage_dump.md"
+    dump_path.write_text("\n".join(dump) + "\n", encoding="utf-8")
+
+    print(f"coverage (formats={args.formats or 'all'})")
+    print(f"  {'format':6s} {'files':>5s} {'parsed':>6s} {'failed':>6s} {'deferred':>8s} {'rows':>5s} "
+          f"{'obs':>5s} {'cov':>4s} {'skip':>4s}")
+    for fmt, c in sorted(by_format.items()):
+        print(f"  {fmt:6s} {c['files']:5d} {c['parsed']:6d} {c['failed']:6d} {c['deferred']:8d} "
+              f"{c['rows']:5d} {c['observations']:5d} {c['coverage']:4d} {c['skipped']:4d}")
+    n = len(sample_rows)
+    print(f"  samples: cited file parsed {sum(r['cited_parsed'] for r in sample_rows)}/{n}; "
+          f"obs for user from cited file: direct-identifier {sum(r['direct_hit'] for r in sample_rows)}/{n}, "
+          f"via linked resource {sum(r['closure_hit'] for r in sample_rows)}/{n}")
+    gl = sum(r["gold_linked"] for r in sample_rows)
+    gt = sum(r["gold_resources"] for r in sample_rows)
+    print(f"  samples: gold resources linked to the user by identifier {gl}/{gt}")
+    print(f"  eval cases: identity {dict(kinds)}; zero-observation cases {len(zero)}/{len(per_case)}")
+    print(f"  resources claimed by more than one user: {len(conflicts)}")
+    print(f"  dump: {dump_path}")
+    return 0
+
+
+# ---------------------------------------------------------------- samples, observations only
+
+def suite_samples_observations(args: argparse.Namespace) -> int:
+    identity, manifest, table = _world(args)
+    dataset = Path(args.dataset)
+    gold = _read_output(Path(args.expected))
+    traces = Path(args.traces)
+    traces.mkdir(parents=True, exist_ok=True)
+    tp = n_gold = n_pred = 0
+    exact = 0
+    dump = [f"# Samples, observations only (formats={args.formats or 'all'})\n"]
+    for r in _requests(dataset / "sample_deletion_requests.csv"):
+        cid = r["case_id"]
+        audit_at = parse_ts(r["audit_at"])
+        uid = identity.resolve_email(r["email"]).user_id
+        steps = gold[cid][1]
+        g = _gold_resources(steps)
+        obs = table.case_observations(uid, audit_at) if uid else []
+        pred = {(o.system_id, o.resource_id) for o in obs}
+        tp += len(g & pred)
+        n_gold += len(g)
+        n_pred += len(pred)
+        exact += g == pred
+        (traces / f"{cid}.json").write_text(json.dumps(
+            {"case_id": cid, "user_id": uid, "audit_at": r["audit_at"],
+             "observations": [_obs_dict(o) for o in obs]}, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        if g == pred and not args.dump_all:
+            continue
+        dump.append(f"\n## {cid} ({uid}, audit_at {r['audit_at']}): gold {len(g)}, found {len(pred)}, "
+                    f"matched {len(g & pred)}\n")
+        for res in sorted(g | pred):
+            tag = "ok" if res in g and res in pred else ("MISSING" if res in g else "extra")
+            mine = [o for o in obs if (o.system_id, o.resource_id) == res]
+            if mine:
+                where = "; ".join(f"{o.file_id}@{o.observed_at:%m-%dT%H:%M} {o.state}" for o in mine)
+            else:
+                anywhere = table.by_resource.get(res, [])
+                where = "not linked; elsewhere: " + ("; ".join(
+                    f"{o.file_id}@{o.captured_at:%m-%d}{'(late)' if o.captured_at > audit_at else ''} "
+                    f"{o.state} ids={list(o.identifiers)}" for o in anywhere) or "nowhere in parsed evidence")
+            dump.append(f"- [{tag}] {res[0]}/{res[1]}: {where}")
+    n = len(gold)
+    recall = tp / n_gold if n_gold else 1.0
+    precision = tp / n_pred if n_pred else 0.0
+    report = {"suite": "samples-observations", "formats_enabled": args.formats or "all",
+              "resource_recall": recall, "resource_precision": precision, "resource_set_exact": exact / n}
+    _write_report(args, "samples_observations", report)
+    dump_path = _out_dir(args) / "samples_observations_dump.md"
+    dump_path.write_text("\n".join(dump) + "\n", encoding="utf-8")
+    print(f"samples (observations only, formats={args.formats or 'all'}): {n} cases")
+    print(f"  gold resources found   {tp}/{n_gold} (recall {recall:.3f})")
+    print(f"  found resources in gold {tp}/{n_pred} (precision {precision:.3f})")
+    print(f"  resource set exact     {exact}/{n}")
+    print(f"  dump: {dump_path}")
+    return 0
+
+
 # ---------------------------------------------------------------- stubs
 
 def _stub(name: str):
@@ -240,7 +433,7 @@ def _stub(name: str):
 SUITES = {
     "contract": suite_contract,
     "samples": suite_samples,
-    "coverage": _stub("coverage"),
+    "coverage": suite_coverage,
     "custom": _stub("custom"),
     "metamorphic": _stub("metamorphic"),
     "complete-check": _stub("complete-check"),
@@ -271,9 +464,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pred", default=None, help="samples: predictions (default runs/<mode>/sample_output.csv)")
     p.add_argument("--traces", default=str(CODE_ROOT / "traces"))
     p.add_argument("--dump-all", action="store_true", help="samples: dump every case, not only mismatches")
+    p.add_argument("--observations-only", action="store_true",
+                   help="samples: compare resources found in evidence with the answer key (no policy)")
+    p.add_argument("--formats", default=None, help="comma list of evidence formats to parse (default all)")
     args = p.parse_args(argv)
     if args.pred is None:
         args.pred = str(CODE_ROOT / "runs" / args.mode / "sample_output.csv")
+    if args.suite == "samples" and args.observations_only:
+        return suite_samples_observations(args)
     return SUITES[args.suite](args)
 
 
