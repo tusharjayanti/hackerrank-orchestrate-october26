@@ -5,10 +5,10 @@ call. PNGs are read by the model twice with different prompts; a row is kept
 when both readings agree on (resource, state, identifiers). On disagreement
 the reading worse for the subject wins and the observation is flagged.
 
-Every row passes a universe check before it becomes an observation: the id
-must match the resource-id pattern, and a model-read id must also be known
-from text evidence or system_activity (a misread digit must not invent a
-record). Catalog labels from LINK_RESOURCE_IDENTITY rows (a statement number,
+A model-read row needs the resource-id pattern and two agreeing readings.
+Whether text evidence or system_activity also knows the id sets confidence:
+unknown ids are tagged vision_only and held back until the agent re-reads
+the file. Catalog labels from LINK_RESOURCE_IDENTITY rows (a statement number,
 a file name) resolve to their resource id.
 """
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 
 from ..identity import normalize_identifier
-from ..llm import LLM, MODEL, SONNET, LLMUnavailable, image_block
+from ..llm import LLM, LLMUnavailable, image_block, model_for
 from ..obs import get_logger
 from ..schemas import EXPOSURE, ObservedState
 from . import vision_prompts as vp
@@ -135,50 +135,67 @@ def _same(a, b) -> bool:
 
 
 def _parse_png(f: EvidenceFile, universe: Universe, llm: LLM) -> ParseResult:
-    """Two Sonnet readings; any disagreement in the file triggers one Opus
-    reading of the whole file as tiebreak."""
+    """Two readings on the vision model; any disagreement in the file triggers
+    one tiebreak reading of the whole file on the agent model.
+
+    Admission: the id matches the resource pattern and two readings agree on
+    (resource, state, identifiers) - agreement is the misread check. Universe
+    membership only sets confidence: an id unknown to text evidence and
+    system_activity is admitted as vision_only, which the engine holds back
+    until the agent re-reads the file."""
     res = ParseResult()
-    readings = {"A": _reading(f, llm, vp.READING_A, "A", SONNET), "B": _reading(f, llm, vp.READING_B, "B", SONNET)}
-    rids = sorted(set(readings["A"]) | set(readings["B"]))
-    known = []
-    for rid in rids:
-        if not RESOURCE_RE.fullmatch(rid) or not universe.known(rid):
-            log.warning("vision_resource_unknown", file_id=f.file_id, resource_id=rid)
-            res.notes.append(f"dropped unknown resource {rid}")
+    vision_model, tiebreak_model = model_for("VISION"), model_for("AGENT")
+    readings = {"A": _reading(f, llm, vp.READING_A, "A", vision_model),
+                "B": _reading(f, llm, vp.READING_B, "B", vision_model)}
+    candidates = []
+    for rid in sorted(set(readings["A"]) | set(readings["B"])):
+        if not RESOURCE_RE.fullmatch(rid):
+            log.warning("vision_not_a_resource_id", file_id=f.file_id, value=rid)
+            res.notes.append(f"dropped non-resource value {rid}")
             res.rows += 1
             res.skipped += 1
             continue
-        known.append(rid)
+        candidates.append(rid)
     pairs = {rid: (_observe(f, readings["A"].get(rid), "A"), _observe(f, readings["B"].get(rid), "B"))
-             for rid in known}
+             for rid in candidates}
     disputed = [rid for rid, (a, b) in pairs.items() if not _same(a, b)]
     tiebreak: dict[str, dict] = {}
     if disputed:
-        log.info("vision_escalated", file_id=f.file_id, disputed=disputed, model=MODEL)
-        res.notes.append(f"escalated to {MODEL}: {disputed}")
-        tiebreak = _reading(f, llm, vp.READING_A, "T", MODEL)
-    for rid in known:
+        log.info("vision_escalated", file_id=f.file_id, disputed=disputed, model=tiebreak_model)
+        res.notes.append(f"escalated to {tiebreak_model}: {disputed}")
+        tiebreak = _reading(f, llm, vp.READING_A, "T", tiebreak_model)
+    for rid in candidates:
         res.rows += 1
-        a, b = pairs[rid]
-        if rid not in disputed:
-            chosen, detail = a, "png:agreed"
-        else:
-            t = _observe(f, tiebreak.get(rid), "T")
-            winner = next((x for x in (a, b) if _same(x, t)), None)
-            if winner is not None:
-                chosen, detail = winner, "png:tiebreak"
-            else:
-                # No two readings agree: keep the one worse for the subject.
-                options = [x for x in (a, b, t) if x is not None]
-                chosen = max(options, key=lambda c: (EXPOSURE[c[0].state], len(c[1])))
-                detail = "png:disagreed"
-                log.warning("vision_disagreement", file_id=f.file_id, resource_id=rid,
-                            states=[x[0].state.value for x in options])
+        known = universe.known(rid)
+        chosen, detail = _settle(f, rid, pairs[rid], tiebreak, known)
         if chosen is None:
             res.skipped += 1
             continue
+        if not known:
+            detail += ":vision_only"
+            res.notes.append(f"vision_only {rid}")
         res.observations.append(chosen[0].model_copy(update={"vision": True, "source_detail": detail}))
     return res
+
+
+def _settle(f: EvidenceFile, rid: str, pair, tiebreak: dict[str, dict], known: bool):
+    """Pick the reading to keep. Returns (candidate or None, detail)."""
+    a, b = pair
+    if _same(a, b):
+        return a, "png:agreed"
+    t = _observe(f, tiebreak.get(rid), "T")
+    winner = next((x for x in (a, b) if _same(x, t)), None)
+    if winner is not None:
+        return winner, "png:tiebreak"
+    if not known:
+        # No agreement and nothing else knows the id: a likely misread.
+        log.warning("vision_unagreed_unknown_dropped", file_id=f.file_id, resource_id=rid)
+        return None, ""
+    # Known id, no two readings agree: keep the one worse for the subject.
+    options = [x for x in (a, b, t) if x is not None]
+    log.warning("vision_disagreement", file_id=f.file_id, resource_id=rid,
+                states=[x[0].state.value for x in options])
+    return max(options, key=lambda c: (EXPOSURE[c[0].state], len(c[1]))), "png:disagreed"
 
 
 __all__ = ["parse", "Universe", "RESOURCE_RE", "ObservedState"]

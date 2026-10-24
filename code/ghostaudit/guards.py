@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import json
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +32,9 @@ class Issue:
     detail: str
 
 
+Bad = Callable[[str, str], None]
+
+
 def check_row(case_id: str, status: str, steps_json: str, audit_at: datetime | None,
               registry: CitationRegistry | None) -> list[Issue]:
     issues: list[Issue] = []
@@ -40,43 +44,59 @@ def check_row(case_id: str, status: str, steps_json: str, audit_at: datetime | N
 
     if status not in {s.value for s in DeletionStatus}:
         bad("status_invalid", repr(status))
+    steps = _parse_steps(steps_json, bad)
+    if steps is None:
+        return issues
+    by_phase = _check_order(steps, bad)
+    if status == DeletionStatus.NOT_APPLICABLE:
+        if steps:
+            bad("na_with_steps", f"{len(steps)} steps")
+        return issues
+    if status == DeletionStatus.COMPLETE:
+        _check_complete(steps, by_phase, bad)
+    if status == DeletionStatus.INCOMPLETE:
+        _check_incomplete(by_phase, bad)
+    if registry is not None:
+        _check_citations(steps, audit_at, registry, bad)
+    return issues
+
+
+def _parse_steps(steps_json: str, bad: Bad) -> list[dict] | None:
+    """JSON array of exactly-7-field steps with allowed triples, or None."""
     try:
         steps = json.loads(steps_json)
     except json.JSONDecodeError as e:
         bad("json_invalid", str(e))
-        return issues
+        return None
     if not isinstance(steps, list):
         bad("json_not_array", type(steps).__name__)
-        return issues
-
-    well_formed = []
+        return None
+    ok = True
     for i, s in enumerate(steps):
         if not isinstance(s, dict) or set(s) != set(STEP_FIELDS):
             bad("step_fields", f"step[{i}] keys={sorted(s) if isinstance(s, dict) else type(s).__name__}")
-            continue
-        if not isinstance(s["step_no"], int) or isinstance(s["step_no"], bool):
+        elif not isinstance(s["step_no"], int) or isinstance(s["step_no"], bool):
             bad("step_no_type", f"step[{i}] step_no={s['step_no']!r}")
-            continue
-        if not all(isinstance(s[k], str) for k in STEP_FIELDS if k != "step_no"):
+        elif not all(isinstance(s[k], str) for k in STEP_FIELDS if k != "step_no"):
             bad("step_field_type", f"step[{i}]")
-            continue
-        if (s["phase"], s["operation"], s["state"]) not in TRIPLE_SET:
+        elif (s["phase"], s["operation"], s["state"]) not in TRIPLE_SET:
             bad("triple", f"step[{i}] {s['phase']}/{s['operation']}/{s['state']}")
+        else:
             continue
-        well_formed.append(s)
-    if len(well_formed) != len(steps):
-        return issues
+        ok = False
+    return steps if ok else None
 
+
+def _check_order(steps: list[dict], bad: Bad) -> dict[str, list[dict]]:
+    """Numbering, phase order, canonical sort, one step per resource per phase."""
     if [s["step_no"] for s in steps] != list(range(1, len(steps) + 1)):
         bad("numbering", f"step_no={[s['step_no'] for s in steps]}")
-
     phases = [PHASE_ORDER[s["phase"]] for s in steps]
     if phases != sorted(phases):
         bad("phase_order", f"phases={[s['phase'] for s in steps]}")
     keys = [step_sort_key(s["phase"], s["operation"], s["system_id"], s["resource_id"]) for s in steps]
     if keys != sorted(keys):
         bad("step_order", "steps not sorted by (phase, operation, system_id, resource_id)")
-
     by_phase: dict[str, list[dict]] = {p.value: [] for p in Phase}
     for s in steps:
         by_phase[s["phase"]].append(s)
@@ -84,58 +104,56 @@ def check_row(case_id: str, status: str, steps_json: str, audit_at: datetime | N
         dup = [r for r, n in Counter((s["system_id"], s["resource_id"]) for s in items).items() if n > 1]
         if dup:
             bad("resource_repeated", f"{phase} {dup}")
+    return by_phase
 
-    if status == DeletionStatus.NOT_APPLICABLE:
-        if steps:
-            bad("na_with_steps", f"{len(steps)} steps")
-        return issues
 
-    if status == DeletionStatus.COMPLETE:
-        if not steps:
-            bad("complete_empty", "COMPLETE needs evidence-backed verification")
-        if by_phase["FINDING"] or by_phase["REMEDIATION"]:
-            bad("complete_non_verification", "COMPLETE has FINDING/REMEDIATION steps")
-        cited = [s for s in steps if s["phase"] == "VERIFICATION"]
-        for s in cited:
-            if not s["evidence_id"]:
-                bad("complete_missing_evidence", f"step {s['step_no']}")
+def _check_complete(steps: list[dict], by_phase: dict[str, list[dict]], bad: Bad) -> None:
+    if not steps:
+        bad("complete_empty", "COMPLETE needs evidence-backed verification")
+    if by_phase["FINDING"] or by_phase["REMEDIATION"]:
+        bad("complete_non_verification", "COMPLETE has FINDING/REMEDIATION steps")
+    for s in by_phase["VERIFICATION"]:
+        if not s["evidence_id"]:
+            bad("complete_missing_evidence", f"step {s['step_no']}")
 
-    if status == DeletionStatus.INCOMPLETE:
-        cited = by_phase["FINDING"]
-        if not cited:
-            bad("incomplete_no_finding", "INCOMPLETE needs at least one finding")
-        for s in cited:
-            if not s["evidence_id"]:
-                bad("finding_missing_evidence", f"step {s['step_no']}")
-        for s in by_phase["REMEDIATION"] + by_phase["VERIFICATION"]:
-            if s["evidence_id"]:
-                bad("future_step_has_evidence", f"step {s['step_no']} cites {s['evidence_id']}")
-        rem = {(s["system_id"], s["resource_id"]): s for s in by_phase["REMEDIATION"]}
-        ver = {(s["system_id"], s["resource_id"]): s for s in by_phase["VERIFICATION"]}
-        found = {(s["system_id"], s["resource_id"]) for s in cited}
-        for res in sorted(found):
-            if res not in rem:
-                bad("finding_without_remediation", str(res))
-            if res not in ver:
-                bad("finding_without_verification", str(res))
-        for res, s in sorted(rem.items()):
-            if res not in found:
-                bad("remediation_without_finding", str(res))
-            elif res in ver and ver[res]["state"] != s["state"]:
-                bad("verification_state_mismatch",
-                    f"{res} remediation={s['state']} verification={ver[res]['state']}")
 
-    if registry is not None:
-        for s in steps:
-            eid = s["evidence_id"]
-            if not eid:
-                continue
-            if not registry.known(eid):
-                bad("citation_unknown", f"step {s['step_no']} cites {eid}")
-            elif audit_at is not None and not registry.citable_at(eid, audit_at):
-                bad("citation_after_audit", f"step {s['step_no']} cites {eid} "
-                    f"({registry.times[eid].isoformat()} > {audit_at.isoformat()})")
-    return issues
+def _check_incomplete(by_phase: dict[str, list[dict]], bad: Bad) -> None:
+    """Findings cite evidence; future steps do not; every finding has a
+    remediation and a verification ending in the remediated state."""
+    findings = by_phase["FINDING"]
+    if not findings:
+        bad("incomplete_no_finding", "INCOMPLETE needs at least one finding")
+    for s in findings:
+        if not s["evidence_id"]:
+            bad("finding_missing_evidence", f"step {s['step_no']}")
+    for s in by_phase["REMEDIATION"] + by_phase["VERIFICATION"]:
+        if s["evidence_id"]:
+            bad("future_step_has_evidence", f"step {s['step_no']} cites {s['evidence_id']}")
+    rem = {(s["system_id"], s["resource_id"]): s for s in by_phase["REMEDIATION"]}
+    ver = {(s["system_id"], s["resource_id"]): s for s in by_phase["VERIFICATION"]}
+    found = {(s["system_id"], s["resource_id"]) for s in findings}
+    for res in sorted(found):
+        if res not in rem:
+            bad("finding_without_remediation", str(res))
+        if res not in ver:
+            bad("finding_without_verification", str(res))
+    for res, s in sorted(rem.items()):
+        if res not in found:
+            bad("remediation_without_finding", str(res))
+        elif res in ver and ver[res]["state"] != s["state"]:
+            bad("verification_state_mismatch", f"{res} remediation={s['state']} verification={ver[res]['state']}")
+
+
+def _check_citations(steps: list[dict], audit_at: datetime | None, registry: CitationRegistry, bad: Bad) -> None:
+    for s in steps:
+        eid = s["evidence_id"]
+        if not eid:
+            continue
+        if not registry.known(eid):
+            bad("citation_unknown", f"step {s['step_no']} cites {eid}")
+        elif audit_at is not None and not registry.citable_at(eid, audit_at):
+            bad("citation_after_audit", f"step {s['step_no']} cites {eid} "
+                f"({registry.times[eid].isoformat()} > {audit_at.isoformat()})")
 
 
 def load_requests(path: Path) -> dict[str, dict]:

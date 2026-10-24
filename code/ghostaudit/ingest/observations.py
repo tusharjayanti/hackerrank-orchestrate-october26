@@ -268,7 +268,11 @@ class ObservationTable:
     def __init__(self, observations: list[Observation], coverage: list[Coverage], stats: list[FileStats],
                  identity: IdentityIndex):
         key = lambda o: (o.observed_at, o.file_id, o.system_id, o.resource_id, o.source_detail)  # noqa: E731
-        self.observations = sorted(observations, key=key)
+        # vision_only rows (a screenshot id nothing else knows) are held out of
+        # state and linking until the agent re-reads the file.
+        self.held = sorted((o for o in observations if o.source_detail.endswith(":vision_only")), key=key)
+        self.observations = sorted((o for o in observations if not o.source_detail.endswith(":vision_only")),
+                                   key=key)
         self.coverage = sorted(coverage, key=lambda c: (c.observed_at, c.file_id, c.source_detail))
         self.stats = stats
         self.identity = identity
@@ -282,6 +286,9 @@ class ObservationTable:
 
     def owners(self, o: Observation) -> set[str]:
         return {u for u in (self.identity.owner_of(i) for i in o.identifiers) if u}
+
+    def held_for_user(self, user_id: str, audit_at: datetime) -> list[Observation]:
+        return [o for o in self.held if o.captured_at <= audit_at and user_id in self.owners(o)]
 
     def user_resources(self, user_id: str, audit_at: datetime) -> set[tuple[str, str]]:
         """Resources linked to the user by an identifier in evidence that was

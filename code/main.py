@@ -1,10 +1,15 @@
 """Run the deletion audit.
 
-    python main.py                                    # all evaluation cases -> ../output.csv
-    python main.py --requests ../dataset/sample_deletion_requests.csv --out runs/tune/sample_output.csv
+    python code/main.py --mode measure     # all evaluation cases -> output.csv at the repo root
+    python code/main.py --mode tune        # same cases -> code/runs/tune/output.csv
+    python code/main.py --mode tune --requests dataset/sample_deletion_requests.csv --out code/runs/tune/sample_output.csv
 
-Without model credentials (or with GHOSTAUDIT_OFFLINE=1) intent is not
-classified: every request is audited as a deletion and flagged.
+Every run gets a run id (UTC time + git commit). A run writes one trace per
+case and a run manifest with the commit, models, flags and model usage; model
+answers are replayed from the on-disk cache when the same request was asked
+before. Without model credentials (or with GHOSTAUDIT_OFFLINE=1) screenshots
+are deferred and intent is not classified: every request is audited as a
+deletion and flagged.
 """
 
 from __future__ import annotations
@@ -12,7 +17,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import subprocess
 import sys
+import traceback
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -20,41 +29,109 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
 from ghostaudit.engine.decide import World, decide_case  # noqa: E402
 from ghostaudit.intent import classify  # noqa: E402
-from ghostaudit.schemas import OUTPUT_HEADER, LinkLayer, case_sort_key  # noqa: E402
+from ghostaudit.llm import CALL_LOG, model_for  # noqa: E402
+from ghostaudit.obs import get_logger  # noqa: E402
+from ghostaudit.schemas import OUTPUT_HEADER, Decision, DeletionStatus, LinkLayer, case_sort_key  # noqa: E402
+
+log = get_logger("main")
 
 
-def run(requests_path: Path, out_path: Path, traces_dir: Path, world: World,
-        max_layer: LinkLayer = LinkLayer.SIBLING) -> list:
-    with open(requests_path, newline="", encoding="utf-8") as f:
-        requests = sorted(csv.DictReader(f), key=lambda r: case_sort_key(r["case_id"]))
-    traces_dir.mkdir(parents=True, exist_ok=True)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+def git_commit() -> tuple[str, bool]:
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, capture_output=True,
+                             text=True, check=True).stdout.strip()
+        dirty = bool(subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO_ROOT,
+                                    capture_output=True, text=True, check=True).stdout.strip())
+        return sha, dirty
+    except (OSError, subprocess.CalledProcessError):
+        return "nogit", False
+
+
+def engine_default(case_id: str, reason: str) -> Decision:
+    """The row written when a case cannot be decided: no finding is invented
+    and the row is marked for review. A missing row is never acceptable."""
+    return Decision(case_id=case_id, status=DeletionStatus.COMPLETE, steps=(),
+                    flags=("NEEDS_REVIEW", f"ENGINE_ERROR:{reason}"))
+
+
+def decide_all(requests: list[dict], world: World, traces_dir: Path, max_layer: LinkLayer) -> list[Decision]:
     intents = classify([r["request_text"] for r in requests], world.llm)
     decisions = []
     for req in requests:
-        decision, trace = decide_case(world, req, max_layer, intents[req["request_text"]])
+        try:
+            decision, trace = decide_case(world, req, max_layer, intents[req["request_text"]])
+        except Exception as e:  # noqa: BLE001 - one case must never cost the others their rows
+            log.error("case_failed", case_id=req["case_id"], error=repr(e), traceback=traceback.format_exc())
+            decision = engine_default(req["case_id"], type(e).__name__)
+            trace = {"case_id": req["case_id"], "error": repr(e), "flags": list(decision.flags)}
         decisions.append(decision)
         (traces_dir / f"{req['case_id']}.json").write_text(
             json.dumps(trace, indent=1, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    return decisions
+
+
+def write_output(decisions: list[Decision], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(OUTPUT_HEADER)
-        for d in decisions:
+        for d in sorted(decisions, key=lambda d: case_sort_key(d.case_id)):
             row = d.to_row()
             w.writerow([row[k] for k in OUTPUT_HEADER])
-    return decisions
+
+
+def usage_for(run_id: str) -> dict:
+    """Model usage of one run, from the call log (live calls and cache hits)."""
+    rows = []
+    if CALL_LOG.is_file():
+        rows = [r for r in map(json.loads, CALL_LOG.read_text(encoding="utf-8").splitlines())
+                if r.get("run_id") == run_id]
+    by_model: dict[str, Counter] = {}
+    for r in rows:
+        c = by_model.setdefault(r["model"], Counter())
+        c["cache_hits" if r["cached"] else "live_calls"] += 1
+        c.update(input_tokens=r["input_tokens"], output_tokens=r["output_tokens"])
+        c["usd_micro"] += round(r["usd"] * 1e6)
+    return {m: {**{k: v for k, v in c.items() if k != "usd_micro"}, "usd": c["usd_micro"] / 1e6}
+            for m, c in sorted(by_model.items())}
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--mode", choices=["tune", "measure"], default="tune")
     p.add_argument("--requests", default=str(DATASET_DIR / "deletion_requests.csv"))
-    p.add_argument("--out", default=str(REPO_ROOT / "output.csv"))
-    p.add_argument("--traces", default=str(CODE_ROOT / "traces"))
+    p.add_argument("--out", default=None, help="default: output.csv at the repo root (measure) or runs/tune/")
     p.add_argument("--max-layer", type=int, default=int(LinkLayer.SIBLING), help="highest link layer to use (1-6)")
     args = p.parse_args(argv)
-    world = World.load()
-    decisions = run(Path(args.requests), Path(args.out), Path(args.traces), world, LinkLayer(args.max_layer))
-    print(f"wrote {len(decisions)} rows to {args.out}")
+
+    sha, dirty = git_commit()
+    stem = Path(args.requests).stem.replace("_", "-")
+    run_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{stem}-{sha}{'-dirty' if dirty else ''}"
+    run_dir = CODE_ROOT / "runs" / args.mode / run_id
+    traces_dir = run_dir / "traces"
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    default_out = REPO_ROOT / "output.csv" if args.mode == "measure" else CODE_ROOT / "runs" / "tune" / "output.csv"
+    out_path = Path(args.out) if args.out else default_out
+
+    with open(args.requests, newline="", encoding="utf-8") as f:
+        requests = sorted(csv.DictReader(f), key=lambda r: case_sort_key(r["case_id"]))
+    world = World.load(run_id=run_id)
+    decisions = decide_all(requests, world, traces_dir, LinkLayer(args.max_layer))
+    write_output(decisions, out_path)
+
+    flags = Counter(f.split(":")[0] for d in decisions for f in d.flags)
+    manifest = {
+        "run_id": run_id, "mode": args.mode, "commit": sha, "dirty": dirty, "requests": str(args.requests),
+        "output": str(out_path), "rows": len(decisions),
+        "status": dict(Counter(d.status.value for d in decisions)),
+        "flags": dict(sorted(flags.items())),
+        "models": {stage: model_for(stage) for stage in ("VISION", "INTENT", "AGENT")},
+        "model_access": world.llm is not None,
+        "usage": usage_for(run_id),
+    }
+    (run_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n",
+                                               encoding="utf-8")
+    print(f"run {run_id}: wrote {len(decisions)} rows to {out_path}; traces and manifest in {run_dir}")
     return 0
 
 

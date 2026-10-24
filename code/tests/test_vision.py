@@ -1,6 +1,7 @@
 from ghostaudit.ingest import parse_vision
 from ghostaudit.ingest.activity import Activity
 from ghostaudit.ingest.manifest import Manifest
+from ghostaudit.llm import model_for
 from ghostaudit.schemas import DataCategory, ObservedState
 
 MANIFEST = Manifest.load()
@@ -52,14 +53,14 @@ def test_png_agreement_keeps_row_without_escalation():
     llm = FakeLLM([row("analytics_7438", emails=["a@b.com"])], [row("analytics_7438", emails=["A@B.com"])])
     [o] = parse_vision.parse(PNG, UNIVERSE, llm).observations
     assert o.source_detail == "png:agreed" and o.state is ObservedState.IDENTIFIABLE
-    assert llm.models == ["claude-sonnet-5-5", "claude-sonnet-5-5"]
+    assert llm.models == [model_for("VISION"), model_for("VISION")]
 
 
 def test_png_disagreement_is_settled_by_one_opus_read():
     llm = FakeLLM([row("analytics_7438")], [row("analytics_7438", emails=["a@b.com"])], [row("analytics_7438")])
     [o] = parse_vision.parse(PNG, UNIVERSE, llm).observations
     assert o.source_detail == "png:tiebreak" and o.state is ObservedState.ANONYMIZED
-    assert llm.models == ["claude-sonnet-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+    assert llm.models == [model_for("VISION"), model_for("VISION"), model_for("AGENT")]
 
 
 def test_png_three_way_disagreement_keeps_worse_reading_and_flags():
@@ -69,7 +70,19 @@ def test_png_three_way_disagreement_keeps_worse_reading_and_flags():
     assert o.source_detail == "png:disagreed" and o.state is ObservedState.IDENTIFIABLE
 
 
-def test_png_unknown_resource_is_dropped():
+def test_png_unknown_but_agreed_id_is_admitted_as_vision_only():
     llm = FakeLLM([row("analytics_99999999")], [row("analytics_99999999")])
+    [o] = parse_vision.parse(PNG, UNIVERSE, llm).observations
+    assert o.source_detail == "png:agreed:vision_only"
+
+
+def test_png_unknown_and_unagreed_id_is_dropped():
+    llm = FakeLLM([row("analytics_99999999")], [row("analytics_99999999", emails=["a@b.com"])],
+                  [row("analytics_99999999", user_references=["user_1"])])
+    assert parse_vision.parse(PNG, UNIVERSE, llm).observations == []
+
+
+def test_png_value_that_is_not_a_resource_id_is_dropped():
+    llm = FakeLLM([row("user_17")], [row("user_17")])
     res = parse_vision.parse(PNG, UNIVERSE, llm)
-    assert res.observations == [] and any("dropped unknown" in n for n in res.notes)
+    assert res.observations == [] and any("non-resource" in n for n in res.notes)

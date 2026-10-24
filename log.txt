@@ -121,3 +121,25 @@ repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T18:37:37Z] Intent fallback (a), vision admission rule, hardening pass
+
+User Prompt (verbatim, secrets redacted):
+[User message, condensed for length] Commit "feat: PNG vision reads, intent classifier, intent gold suite". Fallback (a): add second_label, DELETION fallback only when DELETION is top or second label; expect 20/20 and 10/10. Universe check becomes a confidence signal: admit on id pattern + agreeing readings; unknown ids get lower confidence, tagged vision_only, re-read by the agent before reaching output; report changed rows. MODEL_VISION/MODEL_INTENT Sonnet, MODEL_AGENT claude-opus-5-5, read from .env. Hardening: (1) move organizer README to HACKERRANK_README.md and write ours; (2) .env.example, .venv at repo root; (3) code/package.sh via git archive with guards; (4) remove hardcoded paths; (5) list functions over 60 lines, split the three largest; (6) prompts as .py constants with PROMPT_VERSION, role, constraints, output schema, refusal, few-shot; (7) per-case exception wrapper; (8) llm.py retries, one malformed-JSON retry, then flag; (9) agent tool contract with strict Pydantic inputs; (10) draft evaluation_report.md from real numbers. Report changes, function-length list before/after, re-admitted vision rows; then stop.
+
+Agent Response Summary:
+Committed 1c378cc. second_label and the revised fallback give intent gold 20/20 and NOT_APPLICABLE exactly cases 533-542; vision admission now requires pattern plus agreement, with unknown ids held as vision_only (12 rows under vision-v2, 5 of them case_45's audit records) and models read per stage from .env. Hardening items 1-10 done: README rewritten, organizer README moved, project files and .venv at root with requirements.txt, package.sh with guards (tested on a scratch clone; a missing-path bug fixed), no hardcoded paths, functions over 60 lines 8 -> 4, prompts restructured (vision-v2, intent-v4 after intent-v3 regressed case_28 and was fixed with a deletion-follow-up rule), exception wrapper, LLM retry/JSON handling, agent tool contract with tests, evaluation_report.md drafted. Measure run: samples 1.000/1.000/0.912, contract 1 violation (case_61, needs_review); clean-run cost $0.5070 for 518 cases; 69 tests pass.
+
+Actions:
+* git commit 1c378cc; git mv README.md HACKERRANK_README.md, code/pyproject.toml and code/uv.lock to root
+* Created README.md, .env.example, requirements.txt, code/package.sh, code/evaluation/scoring.py, code/evaluation/evaluation_report.md, code/ghostaudit/agent/{__init__,tools}.py, code/tests/{test_llm,test_main,test_agent_tools}.py
+* Edited code/ghostaudit/{intent,intent_prompts,llm,guards,obs}.py, ingest/{parse_vision,vision_prompts,observations}.py, engine/decide.py, code/main.py, code/evaluation/main.py, code/tests/test_vision.py
+* Ran PNG re-reads (vision-v2), intent v3/v4 classification, tune and measure runs, all suites, pytest (69 passed)
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

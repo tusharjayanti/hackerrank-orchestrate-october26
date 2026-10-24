@@ -29,11 +29,8 @@ from ghostaudit.engine.state import out_of_scope  # noqa: E402
 from ghostaudit.ingest.activity import Activity  # noqa: E402
 from ghostaudit.ingest.observations import build_table  # noqa: E402
 from ghostaudit.llm import LLM, credentials_present  # noqa: E402
-from ghostaudit.schemas import OPERATION_ORDER, DeletionStatus, LinkLayer, case_sort_key  # noqa: E402
-
-STEP_KEY_FIELDS = ("phase", "operation", "state", "system_id", "resource_id", "evidence_id")
-SCORED_FIELDS = ("operation", "state", "system_id", "resource_id", "evidence_id")
-STATUSES = [s.value for s in DeletionStatus]
+from ghostaudit.schemas import LinkLayer, case_sort_key  # noqa: E402
+from scoring import STATUSES, read_output, render_dump, score  # noqa: E402
 
 
 # ---------------------------------------------------------------- contract
@@ -62,178 +59,33 @@ def suite_contract(args: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------- samples
 
-def _read_output(path: Path) -> dict[str, tuple[str, list[dict]]]:
-    rows = {}
-    with open(path, newline="", encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            try:
-                steps = json.loads(r["steps_json"])
-            except json.JSONDecodeError:
-                steps = []
-            rows[r["case_id"]] = (r["deletion_status"], steps if isinstance(steps, list) else [])
-    return rows
-
-
-def _key(step: dict) -> tuple:
-    return tuple(step.get(k) for k in STEP_KEY_FIELDS)
-
-
-def align(expected: list[dict], actual: list[dict]) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
-    """Pair expected with actual steps: exact match, then same
-    (phase, system_id, resource_id), then same (phase, resource_id), then
-    remaining in order within the phase. Returns (pairs, missed, extra)."""
-    exp_left = list(expected)
-    act_left = list(actual)
-    pairs: list[tuple[dict, dict]] = []
-    for keyfn in (
-        _key,
-        lambda s: (s.get("phase"), s.get("system_id"), s.get("resource_id")),
-        lambda s: (s.get("phase"), s.get("resource_id")),
-        lambda s: (s.get("phase"),),
-    ):
-        still = []
-        for e in exp_left:
-            k = keyfn(e)
-            match = next((a for a in act_left if keyfn(a) == k), None)
-            if match is None:
-                still.append(e)
-            else:
-                pairs.append((e, match))
-                act_left.remove(match)
-        exp_left = still
-    return pairs, exp_left, act_left
-
-
-def _load_trace(traces: Path, case_id: str) -> list[dict]:
-    p = traces / f"{case_id}.json"
-    if not p.is_file():
-        return []
-    try:
-        return json.loads(p.read_text(encoding="utf-8")).get("observations", [])
-    except (json.JSONDecodeError, AttributeError):
-        return []
-
-
-def _fmt(s: dict | None) -> str:
-    if s is None:
-        return "—"
-    return f"{s.get('phase','?')[:1]} {s.get('operation')} {s.get('system_id')}/{s.get('resource_id')} " \
-           f"{s.get('state')} [{s.get('evidence_id') or ''}]"
-
-
 def suite_samples(args: argparse.Namespace) -> int:
-    expected = _read_output(Path(args.expected))
-    actual = _read_output(Path(args.pred))
-    traces = Path(args.traces)
-    case_ids = sorted(expected, key=case_sort_key)
-
-    confusion = {e: {a: 0 for a in STATUSES + ["MISSING"]} for e in STATUSES}
-    status_ok = 0
-    tp = n_exp = n_act = 0
-    set_exact = seq_exact = 0
-    field_ok = Counter()
-    per_op = defaultdict(lambda: {"expected": 0, "matched": 0, "predicted": 0})
-    per_case = []
-    dump = [f"# Samples dump\n\nexpected: `{args.expected}`  \npredicted: `{args.pred}`\n"]
-
-    for cid in case_ids:
-        e_status, e_steps = expected[cid]
-        a_status, a_steps = actual.get(cid, ("MISSING", []))
-        confusion[e_status][a_status if a_status in confusion[e_status] else "MISSING"] += 1
-        s_ok = e_status == a_status
-        status_ok += s_ok
-
-        e_ms = Counter(_key(s) for s in e_steps)
-        a_ms = Counter(_key(s) for s in a_steps)
-        case_tp = sum((e_ms & a_ms).values())
-        tp += case_tp
-        n_exp += len(e_steps)
-        n_act += len(a_steps)
-        set_ok = e_ms == a_ms
-        seq_ok = e_steps == a_steps
-        set_exact += set_ok
-        seq_exact += seq_ok
-
-        for s in e_steps:
-            per_op[s["operation"]]["expected"] += 1
-        for s in a_steps:
-            per_op[str(s.get("operation"))]["predicted"] += 1
-        for k in (e_ms & a_ms).elements():
-            per_op[k[1]]["matched"] += 1
-
-        pairs, missed, extra = align(e_steps, a_steps)
-        for e, a in pairs:
-            for f in SCORED_FIELDS:
-                field_ok[f] += e.get(f) == a.get(f)
-
-        per_case.append({"case_id": cid, "status_ok": s_ok, "set_exact": set_ok, "sequence_exact": seq_ok,
-                         "expected_steps": len(e_steps), "predicted_steps": len(a_steps),
-                         "matched_steps": case_tp})
-
-        if not (s_ok and seq_ok) or args.dump_all:
-            obs = _load_trace(traces, cid)
-            dump.append(f"\n## {cid}: expected {e_status}, predicted {a_status}"
-                        f"{'' if s_ok else '  ← STATUS'}{'' if set_ok else '  ← STEPS'}"
-                        f"{'' if seq_ok or not set_ok else '  ← ORDER'}\n")
-            dump.append("| # | expected | predicted |\n|---|---|---|")
-            for i in range(max(len(e_steps), len(a_steps))):
-                e = e_steps[i] if i < len(e_steps) else None
-                a = a_steps[i] if i < len(a_steps) else None
-                mark = "" if e == a else " ✗"
-                dump.append(f"| {i + 1}{mark} | {_fmt(e)} | {_fmt(a)} |")
-            if missed:
-                dump.append("\nmissed: " + "; ".join(_fmt(s) for s in missed))
-            if extra:
-                dump.append("\nextra: " + "; ".join(_fmt(s) for s in extra))
-            if obs:
-                dump.append("\nobservations behind predicted steps:")
-                wanted = {s.get("resource_id") for s in a_steps} | {s.get("resource_id") for s in e_steps}
-                for o in obs:
-                    if o.get("resource_id") in wanted:
-                        dump.append(f"- {json.dumps(o, sort_keys=True)}")
-            elif a_steps:
-                dump.append(f"\n(no trace at {traces / (cid + '.json')})")
-
-    n = len(case_ids)
-    precision = tp / n_act if n_act else (1.0 if not n_exp else 0.0)
-    recall = tp / n_exp if n_exp else 1.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    metrics = {
-        "cases": n,
-        "status_accuracy": status_ok / n,
-        "step_precision": precision,
-        "step_recall": recall,
-        "step_f1": f1,
-        "step_set_exact_rate": set_exact / n,
-        "sequence_exact_rate": seq_exact / n,
-        "field_accuracy": {f: (field_ok[f] / n_exp if n_exp else 1.0) for f in SCORED_FIELDS},
-    }
-    report = {
-        "suite": "samples",
-        "expected": str(args.expected),
-        "pred": str(args.pred),
-        "metrics": metrics,
-        "confusion": confusion,
-        "per_operation": {op: per_op[op] for op in sorted(per_op, key=lambda o: OPERATION_ORDER.get(o, 99))},
-        "per_case": per_case,
-    }
-    _write_report(args, "samples", report)
+    expected = read_output(Path(args.expected))
+    actual = read_output(Path(args.pred))
+    result = score(expected, actual)
+    _write_report(args, "samples", {"suite": "samples", "expected": str(args.expected), "pred": str(args.pred),
+                                    "metrics": result.metrics, "confusion": result.confusion,
+                                    "per_operation": result.per_operation, "per_case": result.per_case})
     dump_path = _out_dir(args) / "samples_dump.md"
-    dump_path.write_text("\n".join(dump) + "\n", encoding="utf-8")
+    dump_path.write_text(render_dump(expected, actual, Path(args.traces), args.dump_all,
+                                     f"# Samples dump\n\nexpected: `{args.expected}`  \npredicted: `{args.pred}`\n"),
+                         encoding="utf-8")
+    _print_samples(result, args.pred, dump_path)
+    return 0 if result.perfect else 1
 
-    print(f"samples: {n} cases, pred={args.pred}")
+
+def _print_samples(result, pred: str, dump_path: Path) -> None:
+    m = result.metrics
+    print(f"samples: {m['cases']} cases, pred={pred}")
     for k in ("status_accuracy", "step_precision", "step_recall", "step_f1",
               "step_set_exact_rate", "sequence_exact_rate"):
-        print(f"  {k:22s} {metrics[k]:.3f}")
-    for f, v in metrics["field_accuracy"].items():
+        print(f"  {k:22s} {m[k]:.3f}")
+    for f, v in m["field_accuracy"].items():
         print(f"  field.{f:16s} {v:.3f}")
     print("  confusion (expected -> predicted):")
     for e in STATUSES:
-        print(f"    {e:15s} " + " ".join(f"{a}={c}" for a, c in confusion[e].items() if c))
+        print(f"    {e:15s} " + " ".join(f"{a}={c}" for a, c in result.confusion[e].items() if c))
     print(f"  dump: {dump_path}")
-    perfect = all(v == 1.0 for k, v in metrics.items() if isinstance(v, float)) and \
-        all(v == 1.0 for v in metrics["field_accuracy"].values())
-    return 0 if perfect else 1
 
 
 # ---------------------------------------------------------------- shared world
@@ -271,84 +123,19 @@ def _obs_dict(o) -> dict:
 def suite_coverage(args: argparse.Namespace) -> int:
     identity, manifest, table = _world(args)
     dataset = Path(args.dataset)
-
-    by_format: dict[str, Counter] = defaultdict(Counter)
-    for st in table.stats:
-        c = by_format[st.format]
-        c["files"] += 1
-        c[st.status] += 1
-        c["rows"] += st.rows
-        c["observations"] += st.observations
-        c["coverage"] += st.coverage
-        c["skipped"] += st.skipped
-
-    # Sample cases: does the file the answer cites yield anything for the user?
-    gold = _read_output(Path(args.expected))
-    status_of = {st.file_id: st.status for st in table.stats}
-    sample_rows = []
-    dump = ["# Coverage: sample cases whose cited file yields no observation for the user\n"]
-    for r in _requests(dataset / "sample_deletion_requests.csv"):
-        cid = r["case_id"]
-        audit_at = parse_ts(r["audit_at"])
-        uid = identity.resolve_email(r["email"]).user_id
-        steps = gold.get(cid, ("", []))[1]
-        cited = sorted({s["evidence_id"] for s in steps if s["evidence_id"]})
-        linked = table.user_resources(uid, audit_at) if uid else set()
-        case_obs = table.case_observations(uid, audit_at) if uid else []
-        row = {"case_id": cid, "user_id": uid, "cited": cited, "files": {}}
-        for fid in cited:
-            direct = sum(1 for o in table.by_user.get(uid, ()) if o.file_id == fid)
-            closure = sum(1 for o in case_obs if o.file_id == fid)
-            row["files"][fid] = {"status": status_of.get(fid, "not_evidence_file"), "direct": direct,
-                                 "closure": closure}
-        row["direct_hit"] = any(v["direct"] for v in row["files"].values())
-        row["closure_hit"] = any(v["closure"] for v in row["files"].values())
-        row["cited_parsed"] = any(v["status"] == "parsed" for v in row["files"].values())
-        g = _gold_resources(steps)
-        row["gold_resources"] = len(g)
-        row["gold_linked"] = len(g & linked)
-        sample_rows.append(row)
-        if row["cited_parsed"] and not row["closure_hit"]:
-            dump.append(f"\n## {cid} ({uid}, audit_at {r['audit_at']}) cites {cited}\n")
-            for res in sorted(g):
-                seen = table.by_resource.get(res, [])
-                where = "; ".join(f"{o.file_id}@{o.captured_at:%Y-%m-%d} {o.state} ids={list(o.identifiers)}"
-                                  for o in seen) or "no observation anywhere"
-                dump.append(f"- gold {res[0]}/{res[1]} {'LINKED' if res in linked else 'unlinked'}: {where}")
-
-    # All evaluation cases.
-    kinds = Counter()
-    zero = []
-    obs_hist = Counter()
-    per_case = []
-    for r in _requests(Path(args.requests)):
-        audit_at = parse_ts(r["audit_at"])
-        res = identity.resolve_email(r["email"])
-        kinds[res.kind.value] += 1
-        obs = table.case_observations(res.user_id, audit_at) if res.user_id else []
-        if not obs:
-            zero.append(r["case_id"])
-        obs_hist[min(len(obs), 10)] += 1
-        per_case.append({"case_id": r["case_id"], "identity": res.kind.value, "observations": len(obs),
-                         "files": sorted({o.file_id for o in obs}),
-                         "resources": sorted({f"{o.system_id}/{o.resource_id}" for o in obs})})
-
-    conflicts = {}
-    for res, obs in table.by_resource.items():
-        owners = set().union(*(table.owners(o) for o in obs)) if obs else set()
-        if len(owners) > 1:
-            conflicts[f"{res[0]}/{res[1]}"] = sorted(owners)
-
-    report = {
+    by_format = _format_rollup(table)
+    sample_rows, dump = _cited_file_coverage(identity, table, read_output(Path(args.expected)),
+                                             _requests(dataset / "sample_deletion_requests.csv"))
+    kinds, zero, obs_hist, per_case = _eval_case_coverage(identity, table, _requests(Path(args.requests)))
+    conflicts = _owner_conflicts(table)
+    _write_report(args, "coverage", {
         "suite": "coverage", "formats_enabled": args.formats or "all",
         "by_format": {k: dict(v) for k, v in sorted(by_format.items())},
-        "files": [st.__dict__ for st in table.stats],
-        "samples": sample_rows,
+        "files": [st.__dict__ for st in table.stats], "samples": sample_rows,
         "identity": dict(kinds), "zero_observation_cases": zero,
         "observation_histogram": {str(k): v for k, v in sorted(obs_hist.items())},
         "owner_conflicts": conflicts, "per_case": per_case,
-    }
-    _write_report(args, "coverage", report)
+    })
     dump_path = _out_dir(args) / "coverage_dump.md"
     dump_path.write_text("\n".join(dump) + "\n", encoding="utf-8")
 
@@ -362,13 +149,78 @@ def suite_coverage(args: argparse.Namespace) -> int:
     print(f"  samples: cited file parsed {sum(r['cited_parsed'] for r in sample_rows)}/{n}; "
           f"obs for user from cited file: direct-identifier {sum(r['direct_hit'] for r in sample_rows)}/{n}, "
           f"via linked resource {sum(r['closure_hit'] for r in sample_rows)}/{n}")
-    gl = sum(r["gold_linked"] for r in sample_rows)
-    gt = sum(r["gold_resources"] for r in sample_rows)
-    print(f"  samples: gold resources linked to the user by identifier {gl}/{gt}")
+    print(f"  samples: gold resources linked to the user by identifier "
+          f"{sum(r['gold_linked'] for r in sample_rows)}/{sum(r['gold_resources'] for r in sample_rows)}")
     print(f"  eval cases: identity {dict(kinds)}; zero-observation cases {len(zero)}/{len(per_case)}")
     print(f"  resources claimed by more than one user: {len(conflicts)}")
     print(f"  dump: {dump_path}")
     return 0
+
+
+def _format_rollup(table) -> dict[str, Counter]:
+    by_format: dict[str, Counter] = defaultdict(Counter)
+    for st in table.stats:
+        c = by_format[st.format]
+        c["files"] += 1
+        c[st.status] += 1
+        c.update(rows=st.rows, observations=st.observations, coverage=st.coverage, skipped=st.skipped)
+    return by_format
+
+
+def _cited_file_coverage(identity, table, gold, requests: list[dict]) -> tuple[list[dict], list[str]]:
+    """Per sample case: does the file the answer cites yield anything for the user?"""
+    status_of = {st.file_id: st.status for st in table.stats}
+    rows = []
+    dump = ["# Coverage: sample cases whose cited file yields no observation for the user\n"]
+    for r in requests:
+        cid, audit_at = r["case_id"], parse_ts(r["audit_at"])
+        uid = identity.resolve_email(r["email"]).user_id
+        steps = gold.get(cid, ("", []))[1]
+        cited = sorted({s["evidence_id"] for s in steps if s["evidence_id"]})
+        linked = table.user_resources(uid, audit_at) if uid else set()
+        case_obs = table.case_observations(uid, audit_at) if uid else []
+        files = {fid: {"status": status_of.get(fid, "not_evidence_file"),
+                       "direct": sum(1 for o in table.by_user.get(uid, ()) if o.file_id == fid),
+                       "closure": sum(1 for o in case_obs if o.file_id == fid)} for fid in cited}
+        g = _gold_resources(steps)
+        row = {"case_id": cid, "user_id": uid, "cited": cited, "files": files,
+               "direct_hit": any(v["direct"] for v in files.values()),
+               "closure_hit": any(v["closure"] for v in files.values()),
+               "cited_parsed": any(v["status"] == "parsed" for v in files.values()),
+               "gold_resources": len(g), "gold_linked": len(g & linked)}
+        rows.append(row)
+        if row["cited_parsed"] and not row["closure_hit"]:
+            dump.append(f"\n## {cid} ({uid}, audit_at {r['audit_at']}) cites {cited}\n")
+            for res in sorted(g):
+                where = "; ".join(f"{o.file_id}@{o.captured_at:%Y-%m-%d} {o.state} ids={list(o.identifiers)}"
+                                  for o in table.by_resource.get(res, [])) or "no observation anywhere"
+                dump.append(f"- gold {res[0]}/{res[1]} {'LINKED' if res in linked else 'unlinked'}: {where}")
+    return rows, dump
+
+
+def _eval_case_coverage(identity, table, requests: list[dict]):
+    kinds, obs_hist = Counter(), Counter()
+    zero, per_case = [], []
+    for r in requests:
+        res = identity.resolve_email(r["email"])
+        kinds[res.kind.value] += 1
+        obs = table.case_observations(res.user_id, parse_ts(r["audit_at"])) if res.user_id else []
+        if not obs:
+            zero.append(r["case_id"])
+        obs_hist[min(len(obs), 10)] += 1
+        per_case.append({"case_id": r["case_id"], "identity": res.kind.value, "observations": len(obs),
+                         "files": sorted({o.file_id for o in obs}),
+                         "resources": sorted({f"{o.system_id}/{o.resource_id}" for o in obs})})
+    return kinds, zero, obs_hist, per_case
+
+
+def _owner_conflicts(table) -> dict[str, list[str]]:
+    conflicts = {}
+    for res, obs in table.by_resource.items():
+        owners = set().union(*(table.owners(o) for o in obs)) if obs else set()
+        if len(owners) > 1:
+            conflicts[f"{res[0]}/{res[1]}"] = sorted(owners)
+    return conflicts
 
 
 # ---------------------------------------------------------------- samples, observations only
@@ -378,7 +230,7 @@ def suite_samples_observations(args: argparse.Namespace) -> int:
     ladder tie to the user, and how many of its links are wrong."""
     world = World.load(Path(args.dataset), _formats(args))
     dataset = Path(args.dataset)
-    gold = _read_output(Path(args.expected))
+    gold = read_output(Path(args.expected))
     layers = list(LinkLayer)
     per_layer = {lay: Counter() for lay in layers}
     n_gold = 0

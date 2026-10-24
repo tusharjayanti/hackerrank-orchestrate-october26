@@ -14,8 +14,8 @@ dependencies = [
 dev = ["pytest>=8"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
+pythonpath = ["code"]
+testpaths = ["code/tests"]
 
 [tool.uv]
 package = false

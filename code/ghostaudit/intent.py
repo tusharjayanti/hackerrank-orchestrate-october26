@@ -4,8 +4,10 @@ Unique texts are classified in batches of 25 with Sonnet; the output is an
 enum per text and nothing else, so an instruction embedded in a request can
 change at most its label, never the steps. The engine never reads the text.
 
-Fallbacks: a text the model does not return, or labels with low confidence,
-is treated as DELETION (the outcome safer for the subject) and flagged.
+Fallbacks: a text the model does not return is treated as DELETION and
+flagged. Low confidence becomes DELETION only when DELETION is the top or the
+second label; low confidence between two non-deletion labels stays
+NOT_APPLICABLE and is flagged for review.
 Without credentials every text is DELETION and flagged INTENT_NOT_CLASSIFIED.
 """
 
@@ -14,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import intent_prompts as ip
-from .llm import LLM, SONNET, LLMUnavailable
+from .llm import LLM, LLMExtractionFailed, LLMUnavailable, model_for
 from .obs import get_logger
 from .schemas import Intent, IntentLabel
 
@@ -29,6 +31,7 @@ class Classified:
     language: str
     flags: tuple[str, ...]
     raw_label: str = ""  # what the model said
+    second_label: str = ""
 
 
 def _batch_content(texts: list[str]) -> list[dict]:
@@ -48,9 +51,12 @@ def classify(texts: list[str], llm: LLM | None) -> dict[str, Classified]:
         try:
             res = llm.json_call(purpose=f"intent:batch{start // BATCH_SIZE}", prompt_version=ip.PROMPT_VERSION,
                                 system=ip.SYSTEM, content=_batch_content(batch), schema=ip.SCHEMA,
-                                max_tokens=8000, effort="medium", model=SONNET)
+                                max_tokens=8000, effort="medium", model=model_for("INTENT"))
             items = {it["index"]: it for it in res.get("items", [])}
-        except LLMUnavailable:
+        except (LLMUnavailable, LLMExtractionFailed) as e:
+            # Fallback: the batch has no answer; every text in it is audited as
+            # a deletion and flagged INTENT_MISSING below.
+            log.error("intent_batch_failed", batch=start // BATCH_SIZE, error=str(e))
             items = {}
         for i, text in enumerate(batch):
             it = items.get(i)
@@ -61,14 +67,19 @@ def classify(texts: list[str], llm: LLM | None) -> dict[str, Classified]:
                 continue
             label = IntentLabel(it["label"])
             flags = []
-            if it["confidence"] == "low" and label is not IntentLabel.DELETION:
-                # Fallback: an uncertain non-deletion label would close the
-                # case with no audit; auditing a non-deletion costs less.
-                flags.append(f"INTENT_LOW_CONFIDENCE:{label.value}")
-                label = IntentLabel.DELETION
+            if it["confidence"] == "low":
+                if IntentLabel.DELETION.value in (it["label"], it["second_label"]):
+                    # Fallback: hesitation between DELETION and anything else
+                    # is audited as a deletion; a missed deletion leaves data
+                    # behind, an extra audit does not.
+                    flags.append(f"INTENT_LOW_CONFIDENCE:{it['label']}/{it['second_label']}")
+                    label = IntentLabel.DELETION
+                else:
+                    # Two non-deletion readings: still not a deletion request.
+                    flags.append(f"INTENT_REVIEW:{it['label']}/{it['second_label']}")
             if it["injection_suspected"]:
                 flags.append("INJECTION_SUSPECTED")
             out[text] = Classified(
                 Intent(label=label, confidence=it["confidence"], injection_suspected=it["injection_suspected"]),
-                it["language"], tuple(flags), it["label"])
+                it["language"], tuple(flags), it["label"], it["second_label"])
     return out
