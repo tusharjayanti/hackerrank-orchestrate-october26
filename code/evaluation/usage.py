@@ -73,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     rows = [json.loads(line) for line in CALL_LOG.read_text(encoding="utf-8").splitlines()]
     run_rows = [r for r in rows if r.get("run_id") == run_id]
     cold = originating_calls(rows, run_rows)
+    if not manifest.get("output"):
+        print(f"{run_id} wrote no output.csv (cross-row check failed); no usage report", file=sys.stderr)
+        return 1
     output = Path(manifest["output"])
     sha = hashlib.sha256(output.read_bytes()).hexdigest()
     n = manifest["rows"]
@@ -83,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
           f"| Commit | `{manifest['commit']}`{' (dirty)' if manifest['dirty'] else ' (clean tree)'} |",
           f"| Command | `{args.command}` |",
           f"| Output | `output.csv`, {n} rows, sha256 `{sha}` |",
-          f"| Model access | `{manifest['model_access']}` (replay: cached answers only; a miss is flagged, never called) |",
+          f"| Model access | `{manifest['model_access']}` "
+          "(replay: cached answers only; a miss is flagged, never called) |",
           f"| Models | vision `{manifest['models']['VISION']}`, intent `{manifest['models']['INTENT']}`, "
           f"agent and vision tiebreak `{manifest['models']['AGENT']}` |",
           f"| Budget breaker | max {manifest['budget']['max_calls']} calls / ${manifest['budget']['max_usd']:.2f}; "

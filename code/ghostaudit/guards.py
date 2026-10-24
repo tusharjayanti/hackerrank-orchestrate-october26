@@ -39,8 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .engine.policy import RETENTION_EXPIRED, Scoped, Treatment, policy_diff, retention_expired, \
-    shared_attachment
+from .engine.policy import RETENTION_EXPIRED, Scoped, Treatment, policy_diff, retention_expired, shared_attachment
 from .engine.state import state_at
 from .engine.steps import build_steps
 from .ingest.manifest import CitationRegistry, parse_ts

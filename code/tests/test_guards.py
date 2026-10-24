@@ -6,7 +6,7 @@ import csv
 import json
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -61,7 +61,7 @@ def _requests(name):
 
 SAMPLES = _requests("sample_deletion_requests.csv")
 EVAL = _requests("deletion_requests.csv")
-UTC = timezone.utc
+UTC = UTC
 
 
 def step(phase, op, state, system, resource, ev=""):
@@ -85,7 +85,7 @@ def as_dicts(d: Decision):
 def test_every_engine_sample_row_passes_the_guards_unchanged():
     for cid, req in SAMPLES.items():
         d, t = decide_case(WORLD, req)
-        g, gt = guard_decision(d, t, req, CTX, regenerate=lambda: (_ for _ in ()).throw(AssertionError(cid)))
+        g, gt = guard_decision(d, t, req, CTX, regenerate=lambda cid=cid: (_ for _ in ()).throw(AssertionError(cid)))
         assert g == d, cid
         assert gt["guards"]["action"] == "none", cid
 
@@ -249,7 +249,7 @@ def _latest_traces(output: Path):
     best = None
     for m in (CODE_ROOT / "runs").glob("tune/*/run_manifest.json"):
         man = json.loads(m.read_text(encoding="utf-8"))
-        if str(Path(man.get("output", "")).resolve()) == want and (best is None or m.parent.name > best.name):
+        if str(Path(man.get("output") or "").resolve()) == want and (best is None or m.parent.name > best.name):
             best = m.parent
     return best / "traces" if best else None
 

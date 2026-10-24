@@ -36,14 +36,15 @@ class World:
     requests: dict[str, dict] = field(default_factory=dict)  # every participant request by case_id
 
     @classmethod
-    def load(cls, dataset_dir: Path = DATASET_DIR, formats: set[str] | None = None, run_id: str = "") -> World:
+    def load(cls, dataset_dir: Path = DATASET_DIR, formats: set[str] | None = None, run_id: str = "",
+             allow_live: bool = True) -> World:
         identity = IdentityIndex.load(dataset_dir)
         manifest = Manifest.load(dataset_dir)
         activity = Activity.load(dataset_dir)
         # live: model calls allowed; replay: cached answers only (a miss is
         # flagged, never called); none: offline, screenshots deferred (PDFs
         # and every text format are read without a model either way).
-        llm = LLM(run_id=run_id) if model_access() != "none" else None
+        llm = LLM(run_id=run_id, allow_live=allow_live) if model_access() != "none" else None
         table = build_table(manifest, identity, formats, activity=activity, llm=llm)
         linker = Linker(table, activity)
         # Layers 5-6 eliminate across cases, so they are solved once over every

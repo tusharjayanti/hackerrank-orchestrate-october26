@@ -45,14 +45,17 @@ def test_step_rejects_extra_field():
              operation="REPORT_REMAINING_RECORD", state="PRESENT", evidence_id="e", note="x")
 
 
+V, R, F = Phase.VERIFICATION, Phase.REMEDIATION, Phase.FINDING
+
+
 def test_sort_key_orders_by_phase_then_operation_then_system_then_resource():
     # Mirrors sample case_11: findings by operation then system_id.
     steps = [
-        step(Phase.VERIFICATION, Operation.VERIFY_RECORD_REDACTED, StepState.REDACTED, "support_platform", "support_864"),
-        step(Phase.REMEDIATION, Operation.ANONYMIZE_RECORD, StepState.ANONYMIZED, "analytics_platform", "analytics_2034"),
-        step(Phase.REMEDIATION, Operation.DISABLE_DATA_FLOW, StepState.DISABLED, "integration_service", "data_flow_9522"),
-        step(Phase.FINDING, Operation.REPORT_EXPOSED_PII, StepState.PRESENT, "support_platform", "support_864", "e"),
-        step(Phase.FINDING, Operation.REPORT_EXPOSED_PII, StepState.PRESENT, "analytics_platform", "analytics_2034", "e"),
+        step(V, Operation.VERIFY_RECORD_REDACTED, StepState.REDACTED, "support_platform", "support_864"),
+        step(R, Operation.ANONYMIZE_RECORD, StepState.ANONYMIZED, "analytics_platform", "analytics_2034"),
+        step(R, Operation.DISABLE_DATA_FLOW, StepState.DISABLED, "integration_service", "data_flow_9522"),
+        step(F, Operation.REPORT_EXPOSED_PII, StepState.PRESENT, "support_platform", "support_864", "e"),
+        step(F, Operation.REPORT_EXPOSED_PII, StepState.PRESENT, "analytics_platform", "analytics_2034", "e"),
         step(Phase.FINDING, Operation.REPORT_REMAINING_RECORD, StepState.PRESENT, "search_service", "search_052", "e"),
         step(Phase.VERIFICATION, Operation.VERIFY_RECORD_ABSENT, StepState.ABSENT, "search_service", "search_052"),
         step(Phase.VERIFICATION, Operation.VERIFY_RECORD_ABSENT, StepState.ABSENT, "account_service", "account_4248"),

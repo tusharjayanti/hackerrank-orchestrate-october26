@@ -1,5 +1,5 @@
 import csv
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ghostaudit import DATASET_DIR
 from ghostaudit.engine.decide import World, decide_case
@@ -35,7 +35,7 @@ def test_record_present_after_request_stays_in_scope():
 
 def test_old_link_without_later_evidence_is_out_of_scope():
     r = REQUESTS["case_17"]
-    linked = datetime(2026, 3, 10, 6, 7, 1, tzinfo=timezone.utc)
+    linked = datetime(2026, 3, 10, 6, 7, 1, tzinfo=UTC)
     assert out_of_scope(("identity_service", "tombstone_17"), WORLD.table, ts(r["requested_at"]), ts(r["audit_at"]),
                         linked)
 

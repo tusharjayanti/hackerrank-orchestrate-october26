@@ -3,7 +3,6 @@ code: each test proves the documented behaviour now holds."""
 
 import csv
 import importlib.util
-import json
 from dataclasses import replace
 from datetime import timedelta
 
@@ -14,7 +13,6 @@ from ghostaudit import llm as llm_mod
 from ghostaudit.agent import tools
 from ghostaudit.engine.decide import World
 from ghostaudit.ingest.manifest import EvidenceFile, Manifest
-from ghostaudit.ingest.observations import ObservationTable
 from ghostaudit.intent import classify
 from ghostaudit.llm import LLM
 from ghostaudit.schemas import Flag, IntentLabel, ObservedState
@@ -126,3 +124,38 @@ def test_a_damaged_cache_entry_is_a_miss_not_a_crash(tmp_path, monkeypatch):
     (tmp_path / "cache" / f"{key}.json").write_text("{not json", encoding="utf-8")
     with pytest.raises(llm_mod.LLMUnavailable):  # a miss; offline, so no call is made
         model.json_call(**args)
+
+
+# 4. Measure runs refuse live calls; the cross-row check runs before writing.
+
+def test_llm_with_live_calls_refused_never_builds_a_client(monkeypatch):
+    monkeypatch.setattr(llm_mod, "credentials_present", lambda: True)
+    model = LLM(allow_live=False)
+    with pytest.raises(llm_mod.LLMUnavailable, match="refused"):
+        model._client_or_raise()
+
+
+def test_measure_mode_refuses_live_calls_unless_allowed(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_load(**kw):
+        seen.update(kw)
+        raise RuntimeError("stop after capturing the arguments")
+
+    monkeypatch.setattr(runner.World, "load", staticmethod(fake_load))
+    args = ["--requests", str(DATASET_DIR / "sample_deletion_requests.csv"), "--out", str(tmp_path / "o.csv")]
+    runner.main(["--mode", "measure", *args])
+    assert seen["allow_live"] is False
+    runner.main(["--mode", "measure", "--allow-live", *args])
+    assert seen["allow_live"] is True
+    runner.main(["--mode", "tune", *args])
+    assert seen["allow_live"] is True
+
+
+def test_cross_row_error_means_no_output_is_written(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.World, "load", staticmethod(lambda **kw: replace(WORLD, llm=None)))
+    monkeypatch.setattr(runner, "cross_row_check", lambda *a, **k: {"errors": ["synthetic"], "warnings": []})
+    out = tmp_path / "out.csv"
+    assert runner.main(["--mode", "tune", "--requests", str(DATASET_DIR / "sample_deletion_requests.csv"),
+                        "--out", str(out)]) == 1
+    assert not out.exists()

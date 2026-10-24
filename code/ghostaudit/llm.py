@@ -98,13 +98,18 @@ JSON_ATTEMPTS = 2  # one retry when the response is not valid JSON
 
 
 class LLM:
-    def __init__(self, budget: Budget | None = None, model: str = MODEL, run_id: str = ""):
+    def __init__(self, budget: Budget | None = None, model: str = MODEL, run_id: str = "", allow_live: bool = True):
         self.budget = budget or Budget()
         self.model = model
         self.run_id = run_id
+        # False: answers come from the cache only, even with credentials
+        # (measure runs without --allow-live); a miss is LLMUnavailable.
+        self.allow_live = allow_live
         self._client = None
 
     def _client_or_raise(self):
+        if not self.allow_live:
+            raise LLMUnavailable("live model calls are refused in this run (measure mode without --allow-live)")
         if self._client is None:
             if not credentials_present():
                 raise LLMUnavailable("no ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in environment or .env")
@@ -201,4 +206,5 @@ class LLM:
             f.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-__all__ = ["LLM", "LLMUnavailable", "LLMExtractionFailed", "BudgetExceeded", "credentials_present", "image_block", "MODEL", "SONNET", "model_for", "model_access"]
+__all__ = ["LLM", "LLMUnavailable", "LLMExtractionFailed", "BudgetExceeded", "credentials_present", "image_block",
+           "MODEL", "SONNET", "model_for", "model_access"]

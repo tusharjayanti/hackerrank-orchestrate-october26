@@ -17,7 +17,8 @@ SNAPSHOT = [
     {"user_id": "user_1", "name": "Jonas Berg", "email": "jonas.berg@example.com",
      "phone": "+46 70 808 74 05", "email_hash": _sha("jonas.berg@example.com"), "updated_at": "2026-01-01T00:00:00Z"},
     {"user_id": "user_2", "name": "Jonas Berglund", "email": "jonas.berglund@example.com",
-     "phone": "+1 (312) 555-0165", "email_hash": _sha("jonas.berglund@example.com"), "updated_at": "2026-01-01T00:00:00Z"},
+     "phone": "+1 (312) 555-0165", "email_hash": _sha("jonas.berglund@example.com"),
+     "updated_at": "2026-01-01T00:00:00Z"},
 ]
 HISTORY = [
     {"audit_id": "audit_1", "user_id": "user_1", "event_time": "2025-01-01T00:00:00Z",
@@ -76,6 +77,7 @@ def test_shared_identifier_is_ambiguous_not_guessed():
 
 def test_real_dataset_resolves_every_request():
     import csv
+
     from ghostaudit import DATASET_DIR
     idx = IdentityIndex.load()
     with open(DATASET_DIR / "deletion_requests.csv", newline="", encoding="utf-8") as f:

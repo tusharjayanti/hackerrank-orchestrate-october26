@@ -122,7 +122,7 @@ class Linker:
                 got = self._inferred.setdefault(cid, {})
                 has_account = any(r[0] == "account_service" for r in (*facts[cid], *got))
                 if not has_account:
-                    link = self._proximity(c, lambda res: free(c, res))
+                    link = self._proximity(c, lambda res, c=c: free(c, res))
                     if link:
                         got[(link.system_id, link.resource_id)] = link
                         taken[(link.system_id, link.resource_id)] = c.user_id
@@ -131,7 +131,7 @@ class Linker:
                 has_analytics = any(r[0] == "analytics_platform" for r in (*facts[cid], *got))
                 if self.enable_sibling and has_account and not has_analytics:
                     account = min(r for r in (*facts[cid], *got) if r[0] == "account_service")
-                    link = self._sibling(c, account[1], lambda res: free(c, res))
+                    link = self._sibling(c, account[1], lambda res, c=c: free(c, res))
                     if link:
                         got[(link.system_id, link.resource_id)] = link
                         taken[(link.system_id, link.resource_id)] = c.user_id

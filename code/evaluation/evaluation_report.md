@@ -390,6 +390,13 @@ score.
   checks. On the ungated carrier case the injection byte-identity check holds
   whenever the two intent labels match; the end-to-end protection is the
   injection fallback in `intent.py` `classify`.
+- Fail-open defaults: a data flow with no readable `enabled` reads DISABLED
+  and a backup with no readable `restore_allowed` reads BLOCKED. Only
+  screenshot readings take this default here (14 observations: 7 resources ×
+  2 readings, in `evidence_14` and `evidence_32`). `case_39` and `case_55`
+  are COMPLETE on it although the screens show `data_flow_1121` Healthy and
+  delivering and no restore block on `backup_9287`; failing closed would make
+  both INCOMPLETE.
 - `case_527`: ticket attachment `support_3896` is treated as a support
   message (REDACT) rather than an attachment (DELETE), because a later file
   classifies the same resource as a support message. Which classification

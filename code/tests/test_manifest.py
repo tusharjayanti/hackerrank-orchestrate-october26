@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from ghostaudit.ingest.manifest import CitationRegistry, Manifest
 
@@ -20,4 +20,4 @@ def test_eligibility_is_inclusive():
 def test_registry_covers_all_citable_sources():
     r = CitationRegistry.load()
     assert r.known("evidence_01") and r.known("activity_01") and r.known("audit_01")
-    assert not r.citable_at("evidence_01", datetime(2000, 1, 1, tzinfo=timezone.utc))
+    assert not r.citable_at("evidence_01", datetime(2000, 1, 1, tzinfo=UTC))

@@ -1,5 +1,5 @@
-from ghostaudit.ingest.manifest import Manifest
 from ghostaudit.ingest import parse_logs, parse_records, parse_sql
+from ghostaudit.ingest.manifest import Manifest
 from ghostaudit.schemas import DataCategory, ObservedState
 
 MANIFEST = Manifest.load()

@@ -16,7 +16,6 @@ from ..ingest.observations import ObservationTable
 from ..schemas import EXPOSURE, Coverage, DataCategory, Observation, ObservedState, ResourceState
 
 
-
 @dataclass(frozen=True)
 class Fact:
     file_id: str

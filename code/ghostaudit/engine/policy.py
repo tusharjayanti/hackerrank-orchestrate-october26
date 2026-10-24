@@ -29,42 +29,42 @@ from ..schemas import DataCategory, Observation, ObservedState, Operation, Requi
 
 log = get_logger(__name__)
 
-O = Operation
+Op = Operation
 S = ObservedState
 
 # (required action, observed state) -> (finding, remediation, verification);
 # finding None means compliant and only the verification is emitted.
-TREATMENT: dict[tuple[RequiredAction, ObservedState], tuple[O | None, O | None, O]] = {
-    (RequiredAction.DELETE, S.ABSENT): (None, None, O.VERIFY_RECORD_ABSENT),
-    (RequiredAction.DELETE, S.PRESENT): (O.REPORT_REMAINING_RECORD, O.DELETE_RECORD, O.VERIFY_RECORD_ABSENT),
-    (RequiredAction.DELETE, S.IDENTIFIABLE): (O.REPORT_REMAINING_RECORD, O.DELETE_RECORD, O.VERIFY_RECORD_ABSENT),
-    (RequiredAction.DELETE, S.REDACTED): (O.REPORT_REMAINING_RECORD, O.DELETE_RECORD, O.VERIFY_RECORD_ABSENT),
-    (RequiredAction.DELETE, S.ANONYMIZED): (O.REPORT_REMAINING_RECORD, O.DELETE_RECORD, O.VERIFY_RECORD_ABSENT),
-    (RequiredAction.REDACT, S.REDACTED): (None, None, O.VERIFY_RECORD_REDACTED),
-    (RequiredAction.REDACT, S.ABSENT): (None, None, O.VERIFY_RECORD_ABSENT),
-    (RequiredAction.REDACT, S.IDENTIFIABLE): (O.REPORT_EXPOSED_PII, O.REDACT_RECORD, O.VERIFY_RECORD_REDACTED),
-    (RequiredAction.REDACT, S.PRESENT): (O.REPORT_EXPOSED_PII, O.REDACT_RECORD, O.VERIFY_RECORD_REDACTED),
-    (RequiredAction.ANONYMIZE, S.ANONYMIZED): (None, None, O.VERIFY_RECORD_ANONYMIZED),
-    (RequiredAction.ANONYMIZE, S.ABSENT): (None, None, O.VERIFY_RECORD_ABSENT),
-    (RequiredAction.ANONYMIZE, S.IDENTIFIABLE): (O.REPORT_EXPOSED_PII, O.ANONYMIZE_RECORD,
-                                                 O.VERIFY_RECORD_ANONYMIZED),
-    (RequiredAction.ANONYMIZE, S.PRESENT): (O.REPORT_EXPOSED_PII, O.ANONYMIZE_RECORD, O.VERIFY_RECORD_ANONYMIZED),
-    (RequiredAction.RETAIN, S.PRESENT): (None, None, O.VERIFY_RECORD_PRESENT),
+TREATMENT: dict[tuple[RequiredAction, ObservedState], tuple[Op | None, Op | None, Op]] = {
+    (RequiredAction.DELETE, S.ABSENT): (None, None, Op.VERIFY_RECORD_ABSENT),
+    (RequiredAction.DELETE, S.PRESENT): (Op.REPORT_REMAINING_RECORD, Op.DELETE_RECORD, Op.VERIFY_RECORD_ABSENT),
+    (RequiredAction.DELETE, S.IDENTIFIABLE): (Op.REPORT_REMAINING_RECORD, Op.DELETE_RECORD, Op.VERIFY_RECORD_ABSENT),
+    (RequiredAction.DELETE, S.REDACTED): (Op.REPORT_REMAINING_RECORD, Op.DELETE_RECORD, Op.VERIFY_RECORD_ABSENT),
+    (RequiredAction.DELETE, S.ANONYMIZED): (Op.REPORT_REMAINING_RECORD, Op.DELETE_RECORD, Op.VERIFY_RECORD_ABSENT),
+    (RequiredAction.REDACT, S.REDACTED): (None, None, Op.VERIFY_RECORD_REDACTED),
+    (RequiredAction.REDACT, S.ABSENT): (None, None, Op.VERIFY_RECORD_ABSENT),
+    (RequiredAction.REDACT, S.IDENTIFIABLE): (Op.REPORT_EXPOSED_PII, Op.REDACT_RECORD, Op.VERIFY_RECORD_REDACTED),
+    (RequiredAction.REDACT, S.PRESENT): (Op.REPORT_EXPOSED_PII, Op.REDACT_RECORD, Op.VERIFY_RECORD_REDACTED),
+    (RequiredAction.ANONYMIZE, S.ANONYMIZED): (None, None, Op.VERIFY_RECORD_ANONYMIZED),
+    (RequiredAction.ANONYMIZE, S.ABSENT): (None, None, Op.VERIFY_RECORD_ABSENT),
+    (RequiredAction.ANONYMIZE, S.IDENTIFIABLE): (Op.REPORT_EXPOSED_PII, Op.ANONYMIZE_RECORD,
+                                                 Op.VERIFY_RECORD_ANONYMIZED),
+    (RequiredAction.ANONYMIZE, S.PRESENT): (Op.REPORT_EXPOSED_PII, Op.ANONYMIZE_RECORD, Op.VERIFY_RECORD_ANONYMIZED),
+    (RequiredAction.RETAIN, S.PRESENT): (None, None, Op.VERIFY_RECORD_PRESENT),
 }
-RESTORE: dict[ObservedState, tuple[O | None, O | None, O]] = {
-    S.BLOCKED: (None, None, O.VERIFY_RESTORE_BLOCKED),
-    S.ACTIVE: (O.REPORT_RESTORE_RISK, O.BLOCK_RESTORE, O.VERIFY_RESTORE_BLOCKED),
+RESTORE: dict[ObservedState, tuple[Op | None, Op | None, Op]] = {
+    S.BLOCKED: (None, None, Op.VERIFY_RESTORE_BLOCKED),
+    S.ACTIVE: (Op.REPORT_RESTORE_RISK, Op.BLOCK_RESTORE, Op.VERIFY_RESTORE_BLOCKED),
 }
-FLOW: dict[ObservedState, tuple[O | None, O | None, O]] = {
-    S.DISABLED: (None, None, O.VERIFY_DATA_FLOW_DISABLED),
-    S.ACTIVE: (O.REPORT_ACTIVE_DATA_FLOW, O.DISABLE_DATA_FLOW, O.VERIFY_DATA_FLOW_DISABLED),
+FLOW: dict[ObservedState, tuple[Op | None, Op | None, Op]] = {
+    S.DISABLED: (None, None, Op.VERIFY_DATA_FLOW_DISABLED),
+    S.ACTIVE: (Op.REPORT_ACTIVE_DATA_FLOW, Op.DISABLE_DATA_FLOW, Op.VERIFY_DATA_FLOW_DISABLED),
 }
 # End state to verify when a linked resource has no citable state.
-PLANNED_END: dict[RequiredAction, O] = {
-    RequiredAction.DELETE: O.VERIFY_RECORD_ABSENT,
-    RequiredAction.REDACT: O.VERIFY_RECORD_REDACTED,
-    RequiredAction.ANONYMIZE: O.VERIFY_RECORD_ANONYMIZED,
-    RequiredAction.RETAIN: O.VERIFY_RECORD_PRESENT,
+PLANNED_END: dict[RequiredAction, Op] = {
+    RequiredAction.DELETE: Op.VERIFY_RECORD_ABSENT,
+    RequiredAction.REDACT: Op.VERIFY_RECORD_REDACTED,
+    RequiredAction.ANONYMIZE: Op.VERIFY_RECORD_ANONYMIZED,
+    RequiredAction.RETAIN: Op.VERIFY_RECORD_PRESENT,
 }
 
 
@@ -136,10 +136,10 @@ def treat(system_id: str, resource_id: str, category: DataCategory | None, state
     note = ""
     if category is DataCategory.BACKUP_ARCHIVE:
         table, key = RESTORE, (state.state if state else None)
-        planned = O.VERIFY_RESTORE_BLOCKED
+        planned = Op.VERIFY_RESTORE_BLOCKED
     elif category is DataCategory.DATA_FLOW:
         table, key = FLOW, (state.state if state else None)
-        planned = O.VERIFY_DATA_FLOW_DISABLED
+        planned = Op.VERIFY_DATA_FLOW_DISABLED
     else:
         action = rules.get(category) if category else None
         if action is None:

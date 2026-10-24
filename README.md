@@ -19,7 +19,8 @@ text evidence already knows, disagreement keeps the reading worse for the
 subject and flags `VISION_DISAGREED`. Intent is an enum per request that
 decides only whether the case is audited; the request text never reaches the
 engine, and a non-deletion label on a request flagged as carrying processing
-instructions is audited as a deletion anyway. The agent only chooses between
+instructions is audited as a deletion anyway, on purpose: a spurious audit
+costs one row, an erased audit is the attack succeeding. The agent only chooses between
 decisions the engine generated, and only stricter ones.
 
 Reported statuses and activity `reported_result` values are treated as claims:
@@ -30,15 +31,19 @@ state comes only from evidence, and only from evidence captured at or before
 
 ![Data flow: L0 ingestion, L1 engine, L2 agent, L3 guards, output](code/docs/system_design.svg)
 
-Text version: `dataset/` → **L0** parsers (`ingest/parse_records.py`,
-`parse_sql.py`, `parse_logs.py`, `parse_vision.py`), `identity.py`,
-`intent.py` → observation table (`ingest/observations.py`) → **L1** per case
-(`engine/decide.py`: intent gate → `linking.py` → `engine/state.py` →
-`engine/policy.py` → `engine/steps.py`) → **L2** agent on flagged cases
-(`agent/`) → **L3** guards on every row (`guards.py` via `main.py`) →
-`output.csv`, traces, `runs/llm_calls.jsonl`. The full design brief, with the
-agent anatomy diagram, is `code/DESIGN.md`; `code/CODE_MAP.md` lists each
-module's job and key functions.
+Text version: `dataset/` → **L0** text parsers (`ingest/parse_records.py`,
+`parse_sql.py`, `parse_logs.py`, PDFs by text layer), vision reader
+(`parse_vision.py`: 2 Sonnet readings per PNG, tiebreak on Opus), intent
+classifier (`intent.py`), identity graph (`identity.py`) → observation table
+(`ingest/observations.py`) → **L1** per case (`engine/decide.py`: intent gate →
+`linking.py` → `engine/state.py` `state_at` → `engine/policy.py`
+`policy_diff` → `engine/steps.py` `build_steps`) → **L2** agent on flagged
+cases (`agent/`, ≤ 6 turns, stricter candidates only) → **L3** guards on every
+row (`guards.py` via `main.py`: contract, policy contract, time + citation,
+COMPLETE re-derivation, regenerate then repair, cross-row check, exception
+wrapper) → `output.csv`, `runs/<mode>/<id>/traces/`, `llm_calls.jsonl`, run
+manifest. The full design brief, with the agent anatomy diagram, is
+`code/DESIGN.md`; `code/CODE_MAP.md` lists each module's job and key functions.
 
 | Layer | What it does | Code |
 |---|---|---|
@@ -120,16 +125,21 @@ automatically and recorded in each run manifest:
     --out code/runs/tune/sample_output.csv
 ```
 
-Each run writes `code/runs/<mode>/<run_id>/traces/<case_id>.json` and
-`run_manifest.json` (commit, status counts, flags, models, model usage).
+`--mode measure` replays cached model answers only: it refuses live model
+calls unless `--allow-live` is passed (a cache miss degrades with its flag
+instead), and writes `output.csv` only if the cross-row check passes. Each run
+writes `code/runs/<mode>/<run_id>/traces/<case_id>.json` and
+`run_manifest.json` (commit hash, dirty-tree flag, whether live calls were
+allowed, effective model access, status counts, flags, models, model usage).
 
 ## Evaluation harness
 
 ```bash
 .venv/bin/python code/evaluation/main.py --suite <suite> [--mode tune|measure]
-uv run pytest            # 127 offline tests (need dataset/ in place); they never call a model.
+uv run pytest            # 130 offline tests (need dataset/ in place); they never call a model.
                          # One checks the policy contract on a tune run's output and is
                          # skipped until `code/main.py --mode tune` has run once.
+uv run ruff check code   # lint (config in pyproject.toml)
 ```
 
 | Suite | Protects against | State |
@@ -228,7 +238,11 @@ Behaviours a reviewer might not find from the sections above:
 
 - Missing evidence fields read as compliant: a data flow with no readable
   `enabled` is DISABLED, a backup with no readable `restore_allowed` is BLOCKED
-  (`ingest/observations.py` `state_for`).
+  (`ingest/observations.py` `state_for`). On this data that default is taken
+  only by screenshot readings (2 connectors, 5 backups), and two evaluation
+  rows rest on it: `case_39` (`data_flow_1121`, shown Healthy and delivering)
+  and `case_55` (`backup_9287`, no restore block shown) are COMPLETE on a
+  reading the screen does not support. Known and left for review.
 - A retained record (audit, legal hold) seen ABSENT, or a backup seen
   PRESENT/ABSENT, has no policy treatment: it gets no step and raises
   `UNMAPPED_CATEGORY` (`engine/policy.py` `treat`).
@@ -254,8 +268,8 @@ Behaviours a reviewer might not find from the sections above:
 - The contract allows one step per resource per phase (`resource_repeated`)
   and does not pair finding and remediation operations beyond matching end
   states (`guards.py`).
-- `output.csv` is written before the cross-row check; a row-count error exits
-  1 with the file already on disk (`main.py` `main`).
+- The cross-row check runs before `output.csv` is written; on a row-count
+  error the file is not written and the run exits 1 (`main.py` `main`).
 - A manifest row whose file is missing or has an unknown extension, and parts
   of a file the parser cannot map (unknown JSON shape, unmapped SQL table or
   log event), are skipped with a warning and no flag; a PDF naming several
@@ -270,6 +284,8 @@ Behaviours a reviewer might not find from the sections above:
   `b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea`, made
   with the configuration locked and the cache replayed:
   `ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= MODEL_VISION=claude-sonnet-5-5 MODEL_INTENT=claude-sonnet-5-5 MODEL_AGENT=claude-opus-5-5 .venv/bin/python code/main.py --mode measure`
+  (measure mode now refuses live calls by itself, so plain
+  `.venv/bin/python code/main.py --mode measure` replays the same answers)
 - Every run id is `<UTC time>-<request file>-<git short sha>[-dirty]`
   (`nogit` in place of the sha outside a git checkout, e.g. an unzipped
   `code.zip`); the

@@ -302,3 +302,24 @@ repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T21:16:13Z] Review follow-ups, redrawn diagrams check, hygiene pass
+
+User Prompt (verbatim, secrets redacted):
+[User message, condensed for length] Four follow-ups from the review, each with the hash check: (1) count observations taking the fail-open default (data flow with no enabled, backup with no restore_allowed); if zero make unknown fail closed, else leave the code and report the cases; (3) grep sample_output.csv for activity or audit ids as evidence and report linked resources; (21) run the cross-row check before writing output.csv; (11) in measure mode refuse live calls unless --allow-live, write the commit hash and dirty flag into the manifest, say so in the README. State in the README that an injection-flagged request is audited as a deletion on purpose. Then the hygiene pass: tests green, ruff clean, same output sha256. Also: the SVGs in code/docs/ were redrawn with the label fixes and new boxes; re-check them against the code and update the text versions under each embed.
+
+Agent Response Summary:
+Item 1: the fail-open default fires on 14 observations, all screenshot readings (data_flow_1121, data_flow_9846, backups 9281/9286/9287/9288/9291); code left as instructed, and two evaluation rows rest on it, case_39 (data_flow_1121, shown Healthy and delivering) and case_55 (backup_9287, no restore block shown), both COMPLETE on an unsupported reading; documented in README and the report. Item 3: all 75 answer-key citations are manifest files, none activity or audit ids, so no recall is left there. Item 21: the cross-row check now runs before writing and a failure writes no output.csv. Item 11: measure mode refuses live calls unless --allow-live (LLM.allow_live) and the manifest records commit, dirty flag, live_calls_allowed and effective model access. README states the injection rationale. Redrawn SVGs checked; three labels fixed (vision agreement wording, regenerate label, traces path) and both text versions updated. Hygiene: ruff added as a dev dependency with config, all findings fixed (per-file E501 ignores only for the verbatim gold set, exact prompt text and log-line fixtures); 130 tests pass; measure from cache reproduces sha256 b43ff70351c803423f26efc4e357954987b41b7a81a9fb409727418a9afff7ea with 0 live calls.
+
+Actions:
+* Edited code/ghostaudit/llm.py, engine/decide.py, engine/policy.py, linking.py, ingest/parse_sql.py, ingest/parse_logs.py, code/main.py, code/evaluation/{main,usage,metamorphic}.py, tests; added tests to code/tests/test_review_gaps.py
+* Edited code/docs/system_design.svg, README.md, code/DESIGN.md, code/evaluation/evaluation_report.md, pyproject.toml, uv.lock
+* Ran ruff, pytest, measure runs
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

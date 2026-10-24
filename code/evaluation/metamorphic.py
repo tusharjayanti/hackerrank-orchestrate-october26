@@ -57,7 +57,8 @@ def decide_rows(dataset: Path, requests: list[dict], relied: Relied | None = Non
         # on every case the perturbation empties.
         d, t = decide_case(world, r, LinkLayer.SIBLING, intent, use_agent=False)
         d, t = guard_decision(d, t, r, ctx,
-                              regenerate=lambda: decide_case(world, r, LinkLayer.SIBLING, intent, use_agent=False))
+                              regenerate=lambda r=r, intent=intent: decide_case(world, r, LinkLayer.SIBLING, intent,
+                                                                               use_agent=False))
         row = d.to_row()
         if relied is not None:
             relied[r["case_id"]] = {(tr["resource"], tr["evidence"]) for tr in t.get("treatments", [])

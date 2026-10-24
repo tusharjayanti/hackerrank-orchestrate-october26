@@ -132,7 +132,8 @@ _NOISE = {"level", "severity", "logger", "service", "trace", "event", "instance"
           "attempt", "duration_ms", "took_ms", "shard", "wait_ms", "seq", "latency_ms", "rows",
           "http_status", "result", "index", "total_hits", "integrity_check", "detector", "file",
           "available", "archive_present", "decision", "policy", "source", "cache", "pool", "marker_found",
-          "last_write", "email_opt_in", "eligible", "deletion_block", "scheduler_registered", "last_run", "reason", "access"}
+          "last_write", "email_opt_in", "eligible", "deletion_block", "scheduler_registered", "last_run", "reason",
+          "access"}
 
 
 def parse(f: EvidenceFile) -> ParseResult:

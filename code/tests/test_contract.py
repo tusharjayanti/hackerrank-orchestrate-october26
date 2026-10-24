@@ -1,14 +1,14 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ghostaudit.guards import check_row
 from ghostaudit.ingest.manifest import CitationRegistry
 
-AUDIT_AT = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)
+AUDIT_AT = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
 REGISTRY = CitationRegistry({
-    "evidence_01": datetime(2026, 9, 1, tzinfo=timezone.utc),
+    "evidence_01": datetime(2026, 9, 1, tzinfo=UTC),
     "evidence_02": AUDIT_AT,  # captured exactly at audit_at: citable
-    "evidence_99": datetime(2026, 9, 5, 12, 1, tzinfo=timezone.utc),  # one minute late
+    "evidence_99": datetime(2026, 9, 5, 12, 1, tzinfo=UTC),  # one minute late
 })
 
 

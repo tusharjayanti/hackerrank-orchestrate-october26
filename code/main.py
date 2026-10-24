@@ -2,7 +2,8 @@
 
     python code/main.py --mode measure     # all evaluation cases -> output.csv at the repo root
     python code/main.py --mode tune        # same cases -> code/runs/tune/output.csv
-    python code/main.py --mode tune --requests dataset/sample_deletion_requests.csv --out code/runs/tune/sample_output.csv
+    python code/main.py --mode tune --requests dataset/sample_deletion_requests.csv \
+        --out code/runs/tune/sample_output.csv
 
 Every run gets a run id (UTC time + request file + git commit). A run writes
 one trace per case and a run manifest with the commit, models, flags,
@@ -23,7 +24,7 @@ import subprocess
 import sys
 import traceback
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -89,8 +90,8 @@ def decide_all(requests: list[dict], world: World, traces_dir: Path, max_layer: 
             # never goes back through the investigator.
             agent_record = trace.get("agent")
             decision, trace = guard_decision(decision, trace, req, guards,
-                                             regenerate=lambda: decide_case(world, req, max_layer, intent,
-                                                                            use_agent=False))
+                                             regenerate=lambda req=req, intent=intent: decide_case(
+                                                 world, req, max_layer, intent, use_agent=False))
             if agent_record and agent_record.get("ran") and trace.get("agent") != agent_record:
                 # The guards replaced a row the agent had chosen; keep what the
                 # agent did so the override is visible in the trace.
@@ -137,11 +138,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--requests", default=str(DATASET_DIR / "deletion_requests.csv"))
     p.add_argument("--out", default=None, help="default: output.csv at the repo root (measure) or runs/tune/")
     p.add_argument("--max-layer", type=int, default=int(LinkLayer.SIBLING), help="highest link layer to use (1-6)")
+    p.add_argument("--allow-live", action="store_true",
+                   help="measure: allow live model calls (default: cached answers only; a miss is flagged)")
     args = p.parse_args(argv)
+    allow_live = args.mode != "measure" or args.allow_live
 
     sha, dirty = git_commit()
     stem = Path(args.requests).stem.replace("_", "-")
-    run_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{stem}-{sha}{'-dirty' if dirty else ''}"
+    run_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{stem}-{sha}{'-dirty' if dirty else ''}"
     run_dir = CODE_ROOT / "runs" / args.mode / run_id
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(parents=True, exist_ok=True)
@@ -151,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     with open(args.requests, newline="", encoding="utf-8") as f:
         requests = sorted(csv.DictReader(f), key=lambda r: case_sort_key(r["case_id"]))
     try:
-        world = World.load(run_id=run_id)
+        world = World.load(run_id=run_id, allow_live=allow_live)
     except Exception as e:  # noqa: BLE001 - even with no world, every case gets a row
         log.error("world_load_failed", error=repr(e), traceback=traceback.format_exc())
         decisions = [engine_default(r["case_id"], f"world load: {type(e).__name__}") for r in requests]
@@ -159,25 +163,32 @@ def main(argv: list[str] | None = None) -> int:
         print(f"run {run_id}: world failed to load ({e!r}); wrote {len(decisions)} NEEDS_REVIEW rows to {out_path}")
         return 1
     decisions = decide_all(requests, world, traces_dir, LinkLayer(args.max_layer))
-    write_output(decisions, out_path)
+    # Cross-row first: a file with the wrong rows is never written.
     cross_row = cross_row_check(decisions, requests, Path(args.requests), sample_mix(DATASET_DIR))
+    if not cross_row["errors"]:
+        write_output(decisions, out_path)
 
     flags = Counter(f for d in decisions for f in d.fired())
     manifest = {
         "run_id": run_id, "mode": args.mode, "commit": sha, "dirty": dirty, "requests": str(args.requests),
-        "output": str(out_path), "rows": len(decisions),
+        "output": str(out_path) if not cross_row["errors"] else None, "rows": len(decisions),
+        "live_calls_allowed": allow_live,
         "status": dict(Counter(d.status.value for d in decisions)),
         "cross_row": cross_row,
         "flags": dict(sorted(flags.items())),
         "models": {stage: model_for(stage) for stage in ("VISION", "INTENT", "AGENT")},
-        "model_access": model_access(),
+        # The effective mode: a key with live calls refused is a replay.
+        "model_access": "replay" if model_access() == "live" and not allow_live else model_access(),
         "budget": {"max_calls": world.llm.budget.max_calls, "max_usd": world.llm.budget.max_usd,
                    "tripped": world.llm.budget.tripped} if world.llm else None,
         "usage": usage_for(run_id),
     }
     (run_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n",
                                                encoding="utf-8")
-    print(f"run {run_id}: wrote {len(decisions)} rows to {out_path}; traces and manifest in {run_dir}")
+    if cross_row["errors"]:
+        print(f"run {run_id}: cross-row check failed; {out_path} NOT written; traces and manifest in {run_dir}")
+    else:
+        print(f"run {run_id}: wrote {len(decisions)} rows to {out_path}; traces and manifest in {run_dir}")
     for w in cross_row["warnings"]:
         print(f"WARNING: {w}", file=sys.stderr)
     for e in cross_row["errors"]:

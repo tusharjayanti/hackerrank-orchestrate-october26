@@ -21,7 +21,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from datetime import UTC
+
+from scoring import STATUSES, read_output, render_dump, score  # noqa: E402
+
 from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
+from ghostaudit.engine.decide import World, case_context, decide_case  # noqa: E402
+from ghostaudit.engine.state import out_of_scope  # noqa: E402
 from ghostaudit.guards import (  # noqa: E402
     categories_from_trace,
     check_output,
@@ -31,16 +37,12 @@ from ghostaudit.guards import (  # noqa: E402
     policy_issues,
 )
 from ghostaudit.identity import IdentityIndex  # noqa: E402
-from ghostaudit.ingest.manifest import CitationRegistry, Manifest, parse_ts  # noqa: E402
-from ghostaudit.engine.decide import World, case_context, decide_case  # noqa: E402
-from ghostaudit.intent import classify  # noqa: E402
-from ghostaudit.engine.state import out_of_scope  # noqa: E402
 from ghostaudit.ingest.activity import Activity  # noqa: E402
+from ghostaudit.ingest.manifest import CitationRegistry, Manifest, parse_ts  # noqa: E402
 from ghostaudit.ingest.observations import build_table  # noqa: E402
+from ghostaudit.intent import classify  # noqa: E402
 from ghostaudit.llm import LLM, model_access  # noqa: E402
 from ghostaudit.schemas import LinkLayer, case_sort_key  # noqa: E402
-from scoring import STATUSES, read_output, render_dump, score  # noqa: E402
-
 
 # ---------------------------------------------------------------- contract
 
@@ -85,7 +87,7 @@ def _traces_for(output: Path) -> Path | None:
             man = json.loads(m.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if str(Path(man.get("output", "")).resolve()) == want and (best is None or m.parent.name > best.name):
+        if str(Path(man.get("output") or "").resolve()) == want and (best is None or m.parent.name > best.name):
             best = m.parent
     return best / "traces" if best else None
 
@@ -499,13 +501,13 @@ def _intake_crosscheck(world, dataset: Path) -> dict:
     account privacy intake classified as non-deletion (CLASSIFY_REQUEST rows
     in system_activity.csv, within the case's request..audit window) against
     the cases the intent classifier calls NOT_APPLICABLE."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     requests = _requests(dataset / "deletion_requests.csv")
     labels = classify([r["request_text"] for r in requests], world.llm)
     classifier = sorted((r["case_id"] for r in requests
                          if not labels[r["request_text"]].intent.authorizes_deletion), key=case_sort_key)
-    far = datetime(9999, 1, 1, tzinfo=timezone.utc)
+    far = datetime(9999, 1, 1, tzinfo=UTC)
     intake = set()
     for c in world.activity.classifications:
         owners = world.linker.owners(("account_service", c.resource_id), far)
