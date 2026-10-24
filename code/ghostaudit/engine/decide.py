@@ -116,6 +116,8 @@ def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SI
     for o in case_obs:
         if o.source_detail == "png:disagreed":
             flags.add(Flag.VISION_DISAGREED, f"{o.file_id}:{o.resource_id}")
+        if o.field_defaulted:
+            flags.add(Flag.VISION_FIELD_DEFAULTED, f"{o.file_id}:{o.resource_id} read as ACTIVE")
     trace["observations"] = [o.model_dump(mode="json") for o in case_obs]
     # L2: gated cases go to the investigator agent, which may only choose
     # between engine-generated candidates; trace["agent"] is set either way.

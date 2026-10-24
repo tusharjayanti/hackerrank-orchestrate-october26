@@ -263,6 +263,7 @@ an invented finding.
 | No API key | with a model-answer cache: replay mode, cached answers only; without one: PDFs and text parsed, screenshots deferred, every request audited as a deletion, gated cases keep the engine decision | `VISION_UNAVAILABLE`, `INTENT_UNAVAILABLE`, `AGENT_UNAVAILABLE` |
 | API down | the SDK retries 4 times with backoff (`llm.SDK_RETRIES`), then `LLMExtractionFailed`: an intent batch is audited as deletions; a screenshot file is recorded as failed; the agent falls back to the engine decision | `INTENT_UNAVAILABLE`, `PARSE_FAILED`, `AGENT_UNAVAILABLE` |
 | Malformed model JSON | one fresh retry (`llm.JSON_ATTEMPTS`), then as above | as above |
+| Flow or backup state field missing (`enabled` / `restore_allowed`) | read as the exposed state, ACTIVE (fail closed); the case is audited as a violation | `VISION_FIELD_DEFAULTED` |
 | Unparseable file | the file is isolated as failed; every other file and case continues | `PARSE_FAILED` on cases audited after its capture |
 | Budget breach | `budget.Budget` (200 calls / $10 by default, `GHOSTAUDIT_MAX_CALLS`, `GHOSTAUDIT_MAX_USD`) stops further calls; extractions fail as above | `BUDGET_BREACHED` |
 | Cache miss in replay mode | never called; the stage degrades | `VISION_UNAVAILABLE`, `INTENT_UNAVAILABLE`, `AGENT_UNAVAILABLE` |

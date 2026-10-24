@@ -323,3 +323,25 @@ repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+
+## [2026-10-25T05:40:00Z] Fail closed on missing flow/restore flags
+
+User Prompt (verbatim, secrets redacted):
+Fail closed. A missing enabled or restore_allowed is now the exposed state, flagged VISION_FIELD_DEFAULTED, and treated like any other violation. Add a test with one of these two cases. Then a fresh measure run on the clean commit: new output.csv, new run id, confirm only those two rows changed and show me the diff. Samples numbers must be unchanged. Add it to the change log in the evaluation report and fix the reliability note and limitations that currently document the old behaviour. Then the hygiene pass. [hygiene items: package.sh to root, obs.py -> telemetry.py, exclude organizer docs from zip, *.zip/.DS_Store in .gitignore, dataset/output.csv template check, prompts package if pure move, scan code/ for stray/stale/debug material, pyproject metadata; rules: no behaviour changes, tests green, ruff clean, same sha256; update path references; README setup uv sync + python code/main.py; before/after tree; commit "refactor: repo layout and hygiene"]. Then regenerate the usage report and every number in the README and reports from the final run, commit, rebuild the zip, fresh-clone check, final hashes for both files.
+
+Agent Response Summary:
+Fail-closed implemented: ingest/observations.py state_for reads a missing `enabled`/`restore_allowed` as ACTIVE, Observation.field_defaulted is set and decide.py raises VISION_FIELD_DEFAULTED. New tests/test_fail_closed.py (case_39). A replay run diffed against the previous output changes only case_39 and case_55 (COMPLETE -> INCOMPLETE); samples output byte-identical (1.000/1.000/0.912). Change log row 18, flags table, README reliability note, report limitation and DESIGN failure table updated.
+
+Actions:
+* Edited code/ghostaudit/schemas.py, code/ghostaudit/ingest/observations.py, code/ghostaudit/engine/decide.py, code/tests/test_schemas.py
+* Created code/tests/test_fail_closed.py
+* Edited README.md, code/DESIGN.md, code/evaluation/evaluation_report.md
+* Ran pytest (132 passed), ruff check, tune-mode replay runs and row diff
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none

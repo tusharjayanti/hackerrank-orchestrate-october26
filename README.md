@@ -236,13 +236,13 @@ under `code/runs/` and are not shipped either.
 
 Behaviours a reviewer might not find from the sections above:
 
-- Missing evidence fields read as compliant: a data flow with no readable
-  `enabled` is DISABLED, a backup with no readable `restore_allowed` is BLOCKED
-  (`ingest/observations.py` `state_for`). On this data that default is taken
-  only by screenshot readings (2 connectors, 5 backups), and two evaluation
-  rows rest on it: `case_39` (`data_flow_1121`, shown Healthy and delivering)
-  and `case_55` (`backup_9287`, no restore block shown) are COMPLETE on a
-  reading the screen does not support. Known and left for review.
+- Missing evidence fields fail closed: a data flow with no readable `enabled`
+  and a backup with no readable `restore_allowed` read ACTIVE, the exposed
+  state, and the case is flagged `VISION_FIELD_DEFAULTED`
+  (`ingest/observations.py` `state_for`). On this data only screenshot
+  readings take the default (2 connectors, 5 backups); two evaluation rows
+  rest on it, `case_39` (`data_flow_1121`, shown Healthy and delivering) and
+  `case_55` (`backup_9287`, no restore block shown), both INCOMPLETE.
 - A retained record (audit, legal hold) seen ABSENT, or a backup seen
   PRESENT/ABSENT, has no policy treatment: it gets no step and raises
   `UNMAPPED_CATEGORY` (`engine/policy.py` `treat`).

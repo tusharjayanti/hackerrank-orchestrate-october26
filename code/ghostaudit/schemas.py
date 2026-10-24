@@ -186,6 +186,9 @@ class Observation(_Frozen):
     # when the evidence states one (retention_until, retained_until, "retain
     # until"). None when the evidence states none.
     retain_until: datetime | None = None
+    # True when a data flow's `enabled` or a backup's restore flag was missing
+    # or unreadable and the state was set to the exposed reading (ACTIVE).
+    field_defaulted: bool = False
 
 
 class Coverage(_Frozen):
@@ -358,6 +361,7 @@ class Flag(StrEnum):
     VISION_DISAGREED = "VISION_DISAGREED"  # no two screenshot readings agreed for a used row
     VISION_ONLY_PENDING = "VISION_ONLY_PENDING"  # screenshot row nothing else knows, held for the agent
     VISION_UNAVAILABLE = "VISION_UNAVAILABLE"  # a screenshot available at audit_at was not read
+    VISION_FIELD_DEFAULTED = "VISION_FIELD_DEFAULTED"  # a flow/backup state field was missing; read as exposed
     BUDGET_BREACHED = "BUDGET_BREACHED"  # model call/spend budget reached during the run
     AGENT_INVOKED = "AGENT_INVOKED"
     AGENT_MAX_TURNS = "AGENT_MAX_TURNS"

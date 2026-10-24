@@ -286,6 +286,7 @@ Status / step precision / step recall unless noted.
 | 15 | tie-breaks relied on iteration order (link choice at equal layer and time, proximity/sibling event choice, observation, fact and SQL row order) | every set or candidate list feeding output or a tie-break sorted on content | metamorphic order/case/decoy checks already passed on the old code | unchanged; the order no longer depends on parser or manifest order by construction |
 | 16 | Investigator agent (L2) merged with free choice between engine candidates: on the 9 gated cases it chose a less-safe reading on 4 — `fact_links_only` on samples 01 and 02 (dropping an L5 link measured at 1.000), the ABSENT side of a same-file conflict on 135 and 383 — and the guards reverted all 4 (contract regeneration on 01/02, COMPLETE downgrade on 135/383) | action space restricted to monotone: a candidate must keep every engine finding and resource and never turn INCOMPLETE into COMPLETE; `fact_links_only`, scope-off and L6 candidates removed; a conflict offers only its safer side; the agent adds a candidate only via `apply_policy` on a verified record the parsers missed | 4 wrong choices, 4 guard reverts (`CONTRACT_REPAIRED` ×2 samples, `COMPLETE_DOWNGRADED` ×2) | 0 wrong choices, 0 reverts; the 4 cases have no admissible alternative; output byte-identical |
 | 17 | A fresh review (a context-free reader of the zip) found three documented safety behaviours the code did not have: an injection-flagged request could still be closed as NOT_APPLICABLE; `apply_policy` accepted a record the parsers had already extracted and an identifier anywhere in the file; the per-case wrapper did not cover intent classification, world loading or a damaged cache entry | a non-deletion label on an injection-flagged request is audited as a deletion; `apply_policy` refuses records the parsers extracted from that file and needs a subject identifier within 15 lines of the id; intent failure audits every request, world-load failure writes every row and exits 1, a damaged cache entry is a miss; 7 tests in `tests/test_review_gaps.py` | output sha256 `b43ff703…afff7ea` | unchanged `b43ff703…afff7ea`; flags unchanged |
+| 18 | A fresh review found a fail-open default: a data flow with no readable `enabled` read DISABLED and a backup with no readable `restore_allowed` read BLOCKED. 14 observations took it (7 resources × 2 readings, all screenshots in `evidence_14` and `evidence_32`); two rows were COMPLETE against what the screen showed — `case_39` (`data_flow_1121` shown Healthy and delivering) and `case_55` (`backup_9287`, no restore block) | fail closed: a missing flag reads ACTIVE (the exposed state, spec §6.5) and the case is flagged `VISION_FIELD_DEFAULTED`; `tests/test_fail_closed.py` | case_39, case_55 COMPLETE (one `VERIFY_…` step each); status mix 154 / 354 / 10 | case_39 INCOMPLETE (`REPORT_ACTIVE_DATA_FLOW` → `DISABLE_DATA_FLOW` → `VERIFY_DATA_FLOW_DISABLED`), case_55 INCOMPLETE (`REPORT_RESTORE_RISK` → `BLOCK_RESTORE` → `VERIFY_RESTORE_BLOCKED`); status mix 152 / 356 / 10; only these 2 rows changed; samples output byte-identical, 1.000 / 1.000 / 0.912 |
 
 ## 6.1 Flags (518 evaluation cases, measure run `20261024T205342Z-deletion-requests-8ed4ab2`)
 
@@ -295,6 +296,7 @@ Status / step precision / step recall unless noted.
 | `INTENT_REVIEW` | 2 (case_540, case_542) | intent had low confidence; both settled as non-deletion (OTHER/ACCESS, ACCESS/EXPORT) |
 | `NEEDS_REVIEW` | 1 (case_61) | no evidence-backed step; COMPLETE `[]` fallback |
 | `UNMAPPED_CATEGORY` | 1 (case_61) | linked resource with no deletion rule (`object_storage/object_19`, no state) |
+| `VISION_FIELD_DEFAULTED` | 2 (case_39, case_55) | a screenshot reading had no `enabled` / `restore_allowed`; read as ACTIVE (fail closed) |
 | `VISION_ONLY_PENDING` | 1 (case_45) | 5 screenshot rows (`evidence_37`, audit records) no other source knows; held |
 | `COMPLETE_DOWNGRADED`, `CONTRACT_REPAIRED` | 0 | before the monotone rule: 2 and 2 (the agent episode, change log row 16) |
 | `SHARED_ATTACHMENT` | 0 | an attachment showing another subject's identifiers, left without a step |
@@ -390,13 +392,13 @@ score.
   checks. On the ungated carrier case the injection byte-identity check holds
   whenever the two intent labels match; the end-to-end protection is the
   injection fallback in `intent.py` `classify`.
-- Fail-open defaults: a data flow with no readable `enabled` reads DISABLED
-  and a backup with no readable `restore_allowed` reads BLOCKED. Only
-  screenshot readings take this default here (14 observations: 7 resources ×
-  2 readings, in `evidence_14` and `evidence_32`). `case_39` and `case_55`
-  are COMPLETE on it although the screens show `data_flow_1121` Healthy and
-  delivering and no restore block on `backup_9287`; failing closed would make
-  both INCOMPLETE.
+- Fail-closed defaults: a data flow with no readable `enabled` or a backup
+  with no readable `restore_allowed` reads ACTIVE (change log row 18). Only
+  screenshot readings take the default here (14 observations in `evidence_14`
+  and `evidence_32`); a screen that shows a connector paused or a restore
+  blocked in words the reading does not map to `enabled` / `restore_allowed`
+  would be reported as a violation. `VISION_FIELD_DEFAULTED` marks those
+  cases for review (2: `case_39`, `case_55`).
 - `case_527`: ticket attachment `support_3896` is treated as a support
   message (REDACT) rather than an attachment (DELETE), because a later file
   classifies the same resource as a support message. Which classification

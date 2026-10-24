@@ -218,13 +218,29 @@ def _looks_linkable(value: str) -> bool:
     return n.isdigit() or (len(n) == 64 and all(c in "0123456789abcdef" for c in n))
 
 
-def state_for(category: DataCategory | None, record: dict, direct_pii: bool) -> ObservedState:
+def _flow_or_restore_flag(category: DataCategory | None, record: dict) -> bool | None:
     if category is DataCategory.DATA_FLOW:
-        on = truthy(record.get("enabled"))
-        return ObservedState.ACTIVE if on else ObservedState.DISABLED
+        return truthy(record.get("enabled"))
     if category is DataCategory.BACKUP_ARCHIVE:
-        allowed = truthy(record.get("restore_allowed", record.get("decision")))
-        return ObservedState.ACTIVE if allowed else ObservedState.BLOCKED
+        return truthy(record.get("restore_allowed", record.get("decision")))
+    return None
+
+
+def field_defaulted(category: DataCategory | None, record: dict) -> bool:
+    """A data flow or backup whose on/off field is missing or unreadable."""
+    return category in (DataCategory.DATA_FLOW, DataCategory.BACKUP_ARCHIVE) and \
+        _flow_or_restore_flag(category, record) is None
+
+
+def state_for(category: DataCategory | None, record: dict, direct_pii: bool) -> ObservedState:
+    if category in (DataCategory.DATA_FLOW, DataCategory.BACKUP_ARCHIVE):
+        # Fail closed: an unknown flag is the exposed reading (flow running,
+        # restore possible), never the compliant one (spec §6.5: when the
+        # evidence cannot be resolved, the safer reading wins).
+        flag = _flow_or_restore_flag(category, record)
+        if flag is False:
+            return ObservedState.DISABLED if category is DataCategory.DATA_FLOW else ObservedState.BLOCKED
+        return ObservedState.ACTIVE
     if category in DEIDENTIFIED_STATE:
         linked = any(present(record.get(k)) for k in ("customer_reference", "user_id"))
         if direct_pii or (category in (DataCategory.ANALYTICS_PROFILE, DataCategory.PRODUCT_TELEMETRY) and linked):
@@ -263,6 +279,7 @@ def observe_record(f: EvidenceFile, observed_at: datetime, record: dict, *, syst
         system_id=system, resource_id=rid, data_category=category, state=state,
         identifiers=tuple(ids), source_detail=source_detail, vision=False,
         retain_until=retain_until_in(flat),
+        field_defaulted=not absent and field_defaulted(category, flat),
     )
 
 
