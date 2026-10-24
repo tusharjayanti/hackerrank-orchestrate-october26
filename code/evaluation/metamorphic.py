@@ -52,8 +52,12 @@ def decide_rows(dataset: Path, requests: list[dict], relied: Relied | None = Non
     out: Rows = {}
     for r in requests:
         intent = intents[r["request_text"]]
-        d, t = decide_case(world, r, LinkLayer.SIBLING, intent)
-        d, t = guard_decision(d, t, r, ctx, regenerate=lambda: decide_case(world, r, LinkLayer.SIBLING, intent))
+        # The agent is off here: these checks are about the deterministic
+        # engine, and each perturbed world would otherwise wake it (and pay)
+        # on every case the perturbation empties.
+        d, t = decide_case(world, r, LinkLayer.SIBLING, intent, use_agent=False)
+        d, t = guard_decision(d, t, r, ctx,
+                              regenerate=lambda: decide_case(world, r, LinkLayer.SIBLING, intent, use_agent=False))
         row = d.to_row()
         if relied is not None:
             relied[r["case_id"]] = {(tr["resource"], tr["evidence"]) for tr in t.get("treatments", [])

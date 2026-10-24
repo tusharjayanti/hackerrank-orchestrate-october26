@@ -64,7 +64,9 @@ def case_context(identity: IdentityIndex, request: dict) -> CaseContext | None:
 
 
 def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SIBLING,
-                classified: Classified | None = None) -> tuple[Decision, dict]:
+                classified: Classified | None = None, use_agent: bool = True) -> tuple[Decision, dict]:
+    """use_agent=False runs the engine alone (the guards' regenerate path, so
+    a regenerated row never re-enters the investigator)."""
     case_id = request["case_id"]
     audit_at = parse_ts(request["audit_at"])
     flags = FlagSet()
@@ -115,7 +117,8 @@ def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SI
     trace["observations"] = [o.model_dump(mode="json") for o in case_obs]
     # L2: gated cases go to the investigator agent, which may only choose
     # between engine-generated candidates; trace["agent"] is set either way.
-    status, steps = review_case(world, request, max_layer, status, steps, flags, trace)
+    if use_agent:
+        status, steps = review_case(world, request, max_layer, status, steps, flags, trace)
     return done(status, steps)
 
 

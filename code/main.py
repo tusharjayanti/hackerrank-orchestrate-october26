@@ -79,10 +79,16 @@ def decide_all(requests: list[dict], world: World, traces_dir: Path, max_layer: 
         try:
             decision, trace = decide_case(world, req, max_layer, intent)
             # The engine's own decision is the regeneration of a failing row.
-            # TODO(agent): once the investigator can change a row, this must
-            # call the engine without the agent.
+            # Regeneration runs the engine alone: a row the guards rejected
+            # never goes back through the investigator.
+            agent_record = trace.get("agent")
             decision, trace = guard_decision(decision, trace, req, guards,
-                                             regenerate=lambda: decide_case(world, req, max_layer, intent))
+                                             regenerate=lambda: decide_case(world, req, max_layer, intent,
+                                                                            use_agent=False))
+            if agent_record and agent_record.get("ran") and trace.get("agent") != agent_record:
+                # The guards replaced a row the agent had chosen; keep what the
+                # agent did so the override is visible in the trace.
+                trace["agent_overridden_by_guard"] = agent_record
         except Exception as e:  # noqa: BLE001 - one case must never cost the others their rows
             log.error("case_failed", case_id=req["case_id"], error=repr(e), traceback=traceback.format_exc())
             decision = engine_default(req["case_id"], type(e).__name__)
