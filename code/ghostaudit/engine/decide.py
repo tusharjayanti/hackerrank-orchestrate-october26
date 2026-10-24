@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,7 +11,8 @@ from ..identity import IdentityIndex
 from ..ingest.activity import Activity
 from ..ingest.manifest import Manifest, parse_ts
 from ..ingest.observations import ObservationTable, build_table, category_for
-from ..linking import Linker
+from ..linking import CaseContext, Linker
+from ..llm import LLM, credentials_present
 from ..obs import get_logger
 from ..schemas import DataCategory, Decision, DeletionStatus, LinkLayer, RequiredAction
 from .policy import load_rules, policy_diff
@@ -33,12 +35,31 @@ class World:
     def load(cls, dataset_dir: Path = DATASET_DIR, formats: set[str] | None = None) -> World:
         identity = IdentityIndex.load(dataset_dir)
         manifest = Manifest.load(dataset_dir)
-        table = build_table(manifest, identity, formats)
         activity = Activity.load(dataset_dir)
-        return cls(identity, manifest, table, activity, Linker(table, activity), load_rules(dataset_dir))
+        # Screenshots need the model; without credentials they are deferred
+        # and the run is engine-only for them (PDFs are read without a model).
+        llm = LLM() if credentials_present() else None
+        table = build_table(manifest, identity, formats, activity=activity, llm=llm)
+        linker = Linker(table, activity)
+        # Layers 5-6 eliminate across cases, so they are solved once over every
+        # participant-facing request (evaluation and sample sets share batches).
+        contexts = []
+        for name in ("deletion_requests.csv", "sample_deletion_requests.csv"):
+            with open(dataset_dir / name, newline="", encoding="utf-8") as f:
+                contexts.extend(c for c in (case_context(identity, r) for r in csv.DictReader(f)) if c)
+        linker.prepare(contexts)
+        return cls(identity, manifest, table, activity, linker, load_rules(dataset_dir))
 
 
-def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.PROXIMITY) -> tuple[Decision, dict]:
+def case_context(identity: IdentityIndex, request: dict) -> CaseContext | None:
+    uid = identity.resolve_email(request["email"]).user_id
+    if uid is None:
+        return None
+    return CaseContext(request["case_id"], uid, parse_ts(request["requested_at"]), parse_ts(request["reported_at"]),
+                       parse_ts(request["audit_at"]), request["reported_status"])
+
+
+def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.SIBLING) -> tuple[Decision, dict]:
     case_id = request["case_id"]
     requested_at = parse_ts(request["requested_at"])
     reported_at = parse_ts(request["reported_at"])
@@ -56,11 +77,12 @@ def decide_case(world: World, request: dict, max_layer: LinkLayer = LinkLayer.PR
         return Decision(case_id=case_id, status=DeletionStatus.INCOMPLETE, steps=(), flags=tuple(flags)), trace
 
     uid = resolution.user_id
-    links = world.linker.links(uid, audit_at, reported_at, max_layer)
+    links = world.linker.links(case_context(world.identity, request), max_layer)
     trace["links"] = [lk.model_dump(mode="json") for lk in sorted(links.values(), key=lambda x: (x.system_id,
                                                                                                     x.resource_id))]
-    if any(lk.layer is LinkLayer.PROXIMITY for lk in links.values()):
-        flags.append("PROXIMITY_LINK")
+    for lk in links.values():
+        if lk.layer >= LinkLayer.PROXIMITY:
+            flags.append(f"INFERRED_LINK_L{int(lk.layer)}:{lk.resource_id}")
 
     resources = []
     trace["out_of_scope"] = []

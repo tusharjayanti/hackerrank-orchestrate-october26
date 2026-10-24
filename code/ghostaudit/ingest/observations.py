@@ -311,27 +311,59 @@ def available_parsers() -> dict:
     return parsers
 
 
-def build_table(manifest: Manifest, identity: IdentityIndex,
-                formats: set[str] | None = None) -> ObservationTable:
-    """formats limits which parsers run (for staged measurement); files of
-    other formats are reported as deferred."""
+def build_table(manifest: Manifest, identity: IdentityIndex, formats: set[str] | None = None,
+                activity=None, llm=None) -> ObservationTable:
+    """Text formats first, then PDFs and screenshots, whose resource ids are
+    checked against what the text evidence and system_activity know.
+    formats limits which parsers run (for staged measurement); files of other
+    formats are reported as deferred."""
     parsers = {k: v for k, v in available_parsers().items() if formats is None or k in formats}
     observations: list[Observation] = []
     coverage: list[Coverage] = []
     stats: list[FileStats] = []
-    for f in manifest.files:
-        parser = parsers.get(f.format)
-        if parser is None:
-            stats.append(FileStats(f.file_id, f.format, "deferred"))
-            continue
+
+    def run(f: EvidenceFile, parser) -> None:
         try:
             res = parser(f)
         except Exception as e:  # noqa: BLE001 - one bad file must not sink the run
             log.error("parse_failed", file_id=f.file_id, path=f.rel_path, error=repr(e))
             stats.append(FileStats(f.file_id, f.format, "failed", notes=[repr(e)]))
-            continue
+            return
         observations.extend(res.observations)
         coverage.extend(res.coverage)
         stats.append(FileStats(f.file_id, f.format, "parsed", res.rows, len(res.observations),
                                len(res.coverage), res.skipped, res.notes))
+
+    visual = []
+    for f in manifest.files:
+        if f.format in ("pdf", "png"):
+            visual.append(f)
+            continue
+        parser = parsers.get(f.format)
+        if parser is None:
+            stats.append(FileStats(f.file_id, f.format, "deferred"))
+            continue
+        run(f, parser)
+
+    from . import parse_vision
+    from ..llm import LLMUnavailable
+
+    known = {o.resource_id for o in observations}
+    labels: dict[str, str] = {}
+    if activity is not None:
+        known |= {e.resource_id for e in activity.events}
+        labels = {lf.label: lf.resource_id for lf in activity.links if lf.label != lf.resource_id}
+    universe = parse_vision.Universe(known, labels)
+    for f in visual:
+        if formats is not None and f.format not in formats:
+            stats.append(FileStats(f.file_id, f.format, "deferred"))
+            continue
+        if f.format == "png" and llm is None:
+            stats.append(FileStats(f.file_id, f.format, "deferred", notes=["no model credentials"]))
+            continue
+        try:
+            run(f, lambda ff: parse_vision.parse(ff, universe, llm))
+        except LLMUnavailable as e:
+            stats.append(FileStats(f.file_id, f.format, "deferred", notes=[str(e)]))
+    stats.sort(key=lambda st: st.file_id)
     return ObservationTable(observations, coverage, stats, identity)

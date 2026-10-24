@@ -23,7 +23,7 @@ from ghostaudit.schemas import OUTPUT_HEADER, LinkLayer, case_sort_key  # noqa: 
 
 
 def run(requests_path: Path, out_path: Path, traces_dir: Path, world: World,
-        max_layer: LinkLayer = LinkLayer.PROXIMITY) -> list:
+        max_layer: LinkLayer = LinkLayer.SIBLING) -> list:
     with open(requests_path, newline="", encoding="utf-8") as f:
         requests = sorted(csv.DictReader(f), key=lambda r: case_sort_key(r["case_id"]))
     traces_dir.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--requests", default=str(DATASET_DIR / "deletion_requests.csv"))
     p.add_argument("--out", default=str(REPO_ROOT / "output.csv"))
     p.add_argument("--traces", default=str(CODE_ROOT / "traces"))
-    p.add_argument("--max-layer", type=int, default=int(LinkLayer.PROXIMITY), help="highest link layer to use (1-5)")
+    p.add_argument("--max-layer", type=int, default=int(LinkLayer.SIBLING), help="highest link layer to use (1-6)")
     args = p.parse_args(argv)
     world = World.load()
     decisions = run(Path(args.requests), Path(args.out), Path(args.traces), world, LinkLayer(args.max_layer))

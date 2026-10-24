@@ -22,9 +22,11 @@ from ghostaudit import CODE_ROOT, DATASET_DIR, REPO_ROOT  # noqa: E402
 from ghostaudit.guards import check_output, load_requests  # noqa: E402
 from ghostaudit.identity import IdentityIndex  # noqa: E402
 from ghostaudit.ingest.manifest import CitationRegistry, Manifest, parse_ts  # noqa: E402
-from ghostaudit.engine.decide import World  # noqa: E402
+from ghostaudit.engine.decide import World, case_context  # noqa: E402
 from ghostaudit.engine.state import out_of_scope  # noqa: E402
+from ghostaudit.ingest.activity import Activity  # noqa: E402
 from ghostaudit.ingest.observations import build_table  # noqa: E402
+from ghostaudit.llm import LLM, credentials_present  # noqa: E402
 from ghostaudit.schemas import OPERATION_ORDER, DeletionStatus, LinkLayer, case_sort_key  # noqa: E402
 
 STEP_KEY_FIELDS = ("phase", "operation", "state", "system_id", "resource_id", "evidence_id")
@@ -242,7 +244,8 @@ def _world(args: argparse.Namespace):
     dataset = Path(args.dataset)
     identity = IdentityIndex.load(dataset)
     manifest = Manifest.load(dataset)
-    table = build_table(manifest, identity, _formats(args))
+    llm = LLM() if credentials_present() else None
+    table = build_table(manifest, identity, _formats(args), activity=Activity.load(dataset), llm=llm)
     return identity, manifest, table
 
 
@@ -386,8 +389,8 @@ def suite_samples_observations(args: argparse.Namespace) -> int:
         uid = world.identity.resolve_email(r["email"]).user_id
         g = _gold_resources(gold[cid][1])
         n_gold += len(g)
-        links = world.linker.links(uid, audit_at, reported_at)
-        _, l5_cands = world.linker.proximity_link(uid, audit_at, reported_at, world.linker.fact_links(uid, audit_at))
+        links = world.linker.links(case_context(world.identity, r))
+        l5_cands = "-"
         for res, lk in links.items():
             per_layer[lk.layer]["links"] += 1
             per_layer[lk.layer]["correct"] += res in g

@@ -7,26 +7,51 @@ one candidate survives elimination.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .ingest.activity import Activity
 from .ingest.observations import ObservationTable
 from .obs import get_logger
-from .schemas import LINK_CONFIDENCE, Link, LinkLayer
+from .schemas import LINK_CONFIDENCE, Link, LinkLayer, case_sort_key
 
 log = get_logger(__name__)
 
-PROXIMITY_WINDOW = timedelta(minutes=10)
+PROXIMITY_WINDOWS = (timedelta(minutes=90),)
+SIBLING_WINDOW = timedelta(minutes=180)
+# The worker result a case's own account delete carries, by reported_status
+# (16/16 SUCCESS for COMPLETE, 10/10 FAILED for NOT_STARTED on the samples).
+RESULT_FOR_STATUS: dict[str, frozenset[str]] = {
+    "COMPLETE": frozenset({"SUCCESS"}),
+    "NOT_STARTED": frozenset({"FAILED"}),
+    "PARTIALLY_COMPLETE": frozenset({"PARTIAL", "SUCCESS"}),
+}
+
+
+@dataclass(frozen=True)
+class CaseContext:
+    case_id: str
+    user_id: str
+    requested_at: datetime
+    reported_at: datetime
+    audit_at: datetime
+    reported_status: str
 
 Res = tuple[str, str]
 
 
 class Linker:
-    def __init__(self, table: ObservationTable, activity: Activity, vision_links: list[Link] | None = None):
+    def __init__(self, table: ObservationTable, activity: Activity, vision_links: list[Link] | None = None,
+                 enable_sibling: bool = False):
+        # Layer 6 measured 1/3 on the samples (it attaches analytics records to
+        # cases that have none), so it is off unless asked for explicitly.
+        self.enable_sibling = enable_sibling
         self.table = table
         self.activity = activity
         self.vision_links = vision_links or []
         self._deletes = activity.primary_profile_deletes()
+        self._anonymizations = [e for e in activity.events if e.event_type == "ANONYMIZE_RECORD"
+                                and e.source_system == "deletion_worker" and e.target_system == "analytics_platform"]
 
     def _link(self, uid: str, res: Res, layer: LinkLayer, source_id: str, at: datetime) -> Link:
         return Link(user_id=uid, system_id=res[0], resource_id=res[1], layer=layer,
@@ -45,7 +70,8 @@ class Linker:
         for o in self.table.by_user.get(uid, ()):
             res = (o.system_id, o.resource_id)
             if o.captured_at <= audit_at:
-                keep(self._link(uid, res, LinkLayer.IDENTIFIER, o.file_id, o.observed_at))
+                layer = LinkLayer.VISION if o.vision else LinkLayer.IDENTIFIER
+                keep(self._link(uid, res, layer, o.file_id, o.observed_at))
             elif o.observed_at <= audit_at:
                 # The snapshot existed at audit time; only its export is late.
                 # Usable to link, never to cite.
@@ -71,27 +97,82 @@ class Linker:
                 if (vl.system_id, vl.resource_id) == res and vl.linked_at <= audit_at}
         return out
 
-    def proximity_link(self, uid: str, audit_at: datetime, reported_at: datetime,
-                       facts: dict[Res, Link]) -> tuple[Link | None, list[str]]:
-        """Layer 5: the primary-profile delete near reported_at that no other
-        user owns. Returns (link or None, candidate resource ids considered)."""
-        if any(sys == "account_service" for sys, _ in facts):
-            return None, []
-        near = [e for e in self._deletes
-                if abs(e.event_time - reported_at) <= PROXIMITY_WINDOW and e.event_time <= audit_at]
-        cands = sorted({e.resource_id for e in near})
-        free = [rid for rid in cands if not (self.owners(("account_service", rid), audit_at) - {uid})]
-        if len(free) != 1:
-            return None, cands
-        event = min((e for e in near if e.resource_id == free[0]), key=lambda e: abs(e.event_time - reported_at))
-        return self._link(uid, ("account_service", free[0]), LinkLayer.PROXIMITY, event.activity_id,
-                          event.event_time), cands
+    def prepare(self, cases: list[CaseContext]) -> None:
+        """Solve layers 5 and 6 jointly over every known request, so that an
+        inference made for one case can eliminate a candidate for another."""
+        self._inferred = {}
+        ctx = {c.case_id: c for c in cases}
+        facts = {c.case_id: self.fact_links(c.user_id, c.audit_at) for c in cases}
+        taken: dict[Res, str] = {}  # resource -> user it was inferred for
 
-    def links(self, uid: str, audit_at: datetime, reported_at: datetime,
-              max_layer: LinkLayer = LinkLayer.PROXIMITY) -> dict[Res, Link]:
-        found = {r: lk for r, lk in self.fact_links(uid, audit_at).items() if lk.layer <= max_layer}
-        if max_layer >= LinkLayer.PROXIMITY:
-            link, _ = self.proximity_link(uid, audit_at, reported_at, found)
-            if link:
-                found[(link.system_id, link.resource_id)] = link
+        def free(c: CaseContext, res: Res) -> bool:
+            if self.owners(res, c.audit_at) - {c.user_id}:
+                return False
+            return taken.get(res, c.user_id) == c.user_id
+
+        changed = True
+        while changed:
+            changed = False
+            for cid in sorted(ctx, key=case_sort_key):
+                c = ctx[cid]
+                got = self._inferred.setdefault(cid, {})
+                has_account = any(r[0] == "account_service" for r in (*facts[cid], *got))
+                if not has_account:
+                    link = self._proximity(c, lambda res: free(c, res))
+                    if link:
+                        got[(link.system_id, link.resource_id)] = link
+                        taken[(link.system_id, link.resource_id)] = c.user_id
+                        changed = True
+                        has_account = True
+                has_analytics = any(r[0] == "analytics_platform" for r in (*facts[cid], *got))
+                if self.enable_sibling and has_account and not has_analytics:
+                    account = next(r for r in (*facts[cid], *got) if r[0] == "account_service")
+                    link = self._sibling(c, account[1], lambda res: free(c, res))
+                    if link:
+                        got[(link.system_id, link.resource_id)] = link
+                        taken[(link.system_id, link.resource_id)] = c.user_id
+                        changed = True
+
+    def _proximity(self, c: CaseContext, is_free) -> Link | None:
+        """Layer 5: the primary-profile delete whose worker result matches the
+        case's reported status and that nobody else owns. The narrow window is
+        tried first; the wide one only when the narrow one has no candidate."""
+        results = RESULT_FOR_STATUS.get(c.reported_status)
+        for window in PROXIMITY_WINDOWS:
+            near = [e for e in self._deletes
+                    if abs(e.event_time - c.reported_at) <= window and e.event_time <= c.audit_at
+                    and (results is None or e.reported_result in results)]
+            cands = sorted({e.resource_id for e in near if is_free(("account_service", e.resource_id))})
+            if not cands:
+                continue
+            if len(cands) > 1:
+                return None
+            event = min((e for e in near if e.resource_id == cands[0]),
+                        key=lambda e: abs(e.event_time - c.reported_at))
+            return self._link(c.user_id, ("account_service", cands[0]), LinkLayer.PROXIMITY, event.activity_id,
+                              event.event_time)
+        return None
+
+    def _sibling(self, c: CaseContext, account_id: str, is_free) -> Link | None:
+        """Layer 6: the analytics anonymization from the same worker run as the
+        user's account deletion, when exactly one free candidate exists."""
+        deletes = [e for e in self._deletes if e.resource_id == account_id
+                   and abs(e.event_time - c.reported_at) <= PROXIMITY_WINDOWS[-1]]
+        if not deletes:
+            return None
+        start = min(deletes, key=lambda e: abs(e.event_time - c.reported_at)).event_time
+        cands = sorted({e.resource_id for e in self._anonymizations
+                        if start <= e.event_time <= start + SIBLING_WINDOW and e.event_time <= c.audit_at
+                        and is_free(("analytics_platform", e.resource_id))})
+        if len(cands) != 1:
+            return None
+        event = next(e for e in self._anonymizations if e.resource_id == cands[0] and e.event_time >= start)
+        return self._link(c.user_id, ("analytics_platform", cands[0]), LinkLayer.SIBLING, event.activity_id,
+                          event.event_time)
+
+    def links(self, c: CaseContext, max_layer: LinkLayer = LinkLayer.SIBLING) -> dict[Res, Link]:
+        found = {r: lk for r, lk in self.fact_links(c.user_id, c.audit_at).items() if lk.layer <= max_layer}
+        for res, lk in getattr(self, "_inferred", {}).get(c.case_id, {}).items():
+            if lk.layer <= max_layer and res not in found:
+                found[res] = lk
         return found

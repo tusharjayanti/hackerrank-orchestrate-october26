@@ -77,3 +77,25 @@ repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T17:20:19Z] L5 result filter, L6 test, vision (PDF text + PNG two-read)
+
+User Prompt (verbatim, secrets redacted):
+[User message, condensed for length] Filter L5 candidates by reported_status -> worker result (COMPLETE->SUCCESS, NOT_STARTED->FAILED, PARTIALLY_COMPLETE->PARTIAL/SUCCESS), window 90 min only with the filter on, eliminate, try batch order for remaining ties; L5 ships at 1.000 or not at all. Test L6 sibling-by-burst for anonymized analytics (ANONYMIZE_RECORD near the account's DELETE_RECORD), adopt only when account linked and candidate unique. 14 contract violations: (c) then the L2 agent, then COMPLETE [] with needs_review flag listed as known limitation; never drop rows or invent findings. Order: vision first (two reads, agree on resource/state/identifier, worse-for-subject on disagreement + flag, same observe_record path and universe check), then intent. Report L5/L6 precision/recall, per-layer table, vision coverage across 15 files, samples score. Commit first: "feat: linking ladder, scope rule, audit engine, first samples score".
+
+Agent Response Summary:
+Committed 4d63f74. The result filter holds; L5 now uses only a 90-min window with the filter and cross-case elimination: 11/11 links correct (1.000), ships; the narrow +/-10 pass was dropped because it produced the two case_18/20 errors. Batch order tested on 69 multi-case batches with known accounts: case_id order matches only 12, requested_at 22, so it is not used. L6 measured 1/3 (anonymize rows are 22-167 min after the delete, shared across cases) and is off by default. Vision: PDFs read deterministically with pypdf (4/4 parsed), PNGs implemented as a cached two-read model path but deferred because no ANTHROPIC credentials exist; L4 links 1/1. Samples score: status 1.000, step precision 1.000, recall 0.912, sequence exact 0.562; pytest 54 passed.
+
+Actions:
+* git commit 4d63f74
+* Edited code/ghostaudit/linking.py (CaseContext, joint L5/L6 solver, L4), schemas.py (SIBLING layer, EXPOSURE), engine/decide.py, engine/state.py, ingest/observations.py (build_table vision stage), evaluation/main.py, main.py
+* Created code/ghostaudit/budget.py, code/ghostaudit/llm.py, code/ghostaudit/ingest/vision_prompts.py, code/ghostaudit/ingest/parse_vision.py, code/tests/test_vision.py; added pypdf dependency
+* Ran ladder report, coverage, engine on samples, samples and contract suites, pytest
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

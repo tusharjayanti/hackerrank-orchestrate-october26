@@ -13,14 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..ingest.observations import ObservationTable
-from ..schemas import Coverage, DataCategory, Observation, ObservedState, ResourceState
+from ..schemas import EXPOSURE, Coverage, DataCategory, Observation, ObservedState, ResourceState
 
-# Within one file, the more exposed state describes the resource.
-_EXPOSURE = {
-    ObservedState.IDENTIFIABLE: 6, ObservedState.PRESENT: 5, ObservedState.ACTIVE: 4,
-    ObservedState.REDACTED: 3, ObservedState.ANONYMIZED: 3, ObservedState.DISABLED: 2,
-    ObservedState.BLOCKED: 2, ObservedState.ABSENT: 0,
-}
 
 
 @dataclass(frozen=True)
@@ -74,7 +68,7 @@ def state_at(res: tuple[str, str], table: ObservationTable, audit_at: datetime) 
     for fid, fs in by_file.items():
         latest = max(f.observed_at for f in fs)
         at_latest = [f for f in fs if f.observed_at == latest]
-        best = max(at_latest, key=lambda f: (_EXPOSURE[f.state], f.explicit))
+        best = max(at_latest, key=lambda f: (EXPOSURE[f.state], f.explicit))
         summaries.append((latest, best.explicit, fid, best))
     # Latest file wins; at equal time an explicit observation beats an omission.
     summaries.sort(key=lambda s: (s[0], s[1], s[2]))

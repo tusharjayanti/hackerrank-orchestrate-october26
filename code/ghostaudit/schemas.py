@@ -69,6 +69,15 @@ class ObservedState(StrEnum):
     BLOCKED = "BLOCKED"
 
 
+# How exposed a resource is in each state: used to pick the reading that is
+# worse for the subject (replica drift, disagreeing vision readings).
+EXPOSURE: dict[ObservedState, int] = {
+    ObservedState.IDENTIFIABLE: 6, ObservedState.PRESENT: 5, ObservedState.ACTIVE: 4,
+    ObservedState.REDACTED: 3, ObservedState.ANONYMIZED: 3, ObservedState.DISABLED: 2,
+    ObservedState.BLOCKED: 2, ObservedState.ABSENT: 0,
+}
+
+
 class DeletionStatus(StrEnum):
     COMPLETE = "COMPLETE"
     INCOMPLETE = "INCOMPLETE"
@@ -214,6 +223,7 @@ class LinkLayer(IntEnum):
     INNER_SNAPSHOT = 3  # identifier in a snapshot taken <= audit_at, exported later: link only
     VISION = 4  # identifier read from an image or PDF
     PROXIMITY = 5  # sole remaining deletion-worker candidate near reported_at
+    SIBLING = 6  # sole free anonymization in the same worker run as the account
 
 
 LINK_CONFIDENCE: dict[LinkLayer, float] = {
@@ -222,6 +232,7 @@ LINK_CONFIDENCE: dict[LinkLayer, float] = {
     LinkLayer.INNER_SNAPSHOT: 0.95,
     LinkLayer.VISION: 0.8,
     LinkLayer.PROXIMITY: 0.6,
+    LinkLayer.SIBLING: 0.5,
 }
 
 
