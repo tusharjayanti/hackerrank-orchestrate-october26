@@ -182,6 +182,10 @@ class Observation(_Frozen):
     identifiers: tuple[str, ...]
     source_detail: str
     vision: bool = False
+    # For retained categories: the date until which the record may be kept,
+    # when the evidence states one (retention_until, retained_until, "retain
+    # until"). None when the evidence states none.
+    retain_until: datetime | None = None
 
 
 class Coverage(_Frozen):
