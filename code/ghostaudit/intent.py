@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import intent_prompts as ip
 from .llm import LLM, LLMExtractionFailed, LLMUnavailable, model_for
-from .obs import get_logger
+from .prompts import intent as ip
 from .schemas import Flag, FlagHit, Intent, IntentLabel
+from .telemetry import get_logger
 
 log = get_logger(__name__)
 

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import CODE_ROOT, REPO_ROOT
 from .budget import Budget, BudgetExceeded
-from .obs import get_logger
+from .telemetry import get_logger
 
 log = get_logger(__name__)
 

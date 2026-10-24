@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 code/runs/
-code/traces/
 code/.cache/
-code.zip
+*.zip
 .DS_Store

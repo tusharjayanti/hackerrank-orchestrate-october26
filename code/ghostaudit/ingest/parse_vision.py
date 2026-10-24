@@ -18,9 +18,9 @@ import re
 
 from ..identity import normalize_identifier
 from ..llm import LLM, LLMUnavailable, image_block, model_for
-from ..obs import get_logger
+from ..prompts import vision as vp
 from ..schemas import EXPOSURE, ObservedState
-from . import vision_prompts as vp
+from ..telemetry import get_logger
 from .manifest import EvidenceFile
 from .observations import ParseResult, observe_record, text_identifiers
 

@@ -21,8 +21,8 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
-from ..obs import get_logger
 from ..schemas import DataCategory, ObservedState
+from ..telemetry import get_logger
 from .manifest import EvidenceFile, parse_ts
 from .observations import (
     LOOKUP_KEYS,

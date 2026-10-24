@@ -15,8 +15,8 @@ from ..ingest.observations import ObservationTable, build_table, category_for
 from ..intent import Classified
 from ..linking import CaseContext, Linker
 from ..llm import LLM, model_access
-from ..obs import get_logger
 from ..schemas import DataCategory, Decision, DeletionStatus, Flag, FlagSet, LinkLayer, RequiredAction
+from ..telemetry import get_logger
 from .policy import Scoped, load_rules, policy_diff, retention_expired, shared_attachment
 from .state import out_of_scope, state_at
 from .steps import build_steps

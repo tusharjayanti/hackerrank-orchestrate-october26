@@ -16,8 +16,8 @@ from enum import StrEnum
 from pathlib import Path
 
 from . import DATASET_DIR
-from .obs import get_logger
 from .schemas import IdentitySet
+from .telemetry import get_logger
 
 log = get_logger(__name__)
 
@@ -146,9 +146,9 @@ class IdentityIndex:
             else:
                 # Fallback: an identifier shared by several users links to
                 # nobody; attributing it to either would be a guess.
-                # TODO(owner-at-captured_at): if one appears, resolve to the
-                # user who held the identifier at the observation's
-                # captured_at, decided by user_audit_log event_time.
+                # Not implemented (3 shared identifiers in this dataset):
+                # resolving to the user who held it at the observation's
+                # captured_at, from user_audit_log event_time.
                 log.warning("identifier_ambiguous", identifier_kind=_kind(key), users=sorted(uids))
                 ambiguous.add(key)
         current = {normalize_email(r["email"]) for r in base.values()}
@@ -178,28 +178,3 @@ def _kind(identifier: str) -> str:
     if identifier.startswith("user_"):
         return "user_id"
     return "phone"
-
-
-def main() -> int:
-    """Report how every request email resolves (current / historical / none)."""
-    index = IdentityIndex.load()
-    any_unresolved = False
-    for name in ("deletion_requests.csv", "sample_deletion_requests.csv"):
-        with open(DATASET_DIR / name, newline="", encoding="utf-8") as f:
-            reqs = list(csv.DictReader(f))
-        counts = {k: 0 for k in MatchKind}
-        unresolved = []
-        for r in reqs:
-            res = index.resolve_email(r["email"])
-            counts[res.kind] += 1
-            if res.kind is MatchKind.NONE:
-                unresolved.append(r["case_id"])
-        print(f"{name}: {len(reqs)} requests  current={counts[MatchKind.CURRENT]} "
-              f"historical={counts[MatchKind.HISTORICAL]} unresolved={counts[MatchKind.NONE]}"
-              + (f" {unresolved}" if unresolved else ""))
-        any_unresolved |= bool(unresolved)
-    return 1 if any_unresolved else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

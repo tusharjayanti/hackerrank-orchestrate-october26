@@ -35,7 +35,6 @@ from ghostaudit.guards import GuardContext, cross_row_check, guard_decision, sam
 from ghostaudit.ingest.manifest import CitationRegistry  # noqa: E402
 from ghostaudit.intent import classify  # noqa: E402
 from ghostaudit.llm import CALL_LOG, model_access, model_for  # noqa: E402
-from ghostaudit.obs import get_logger  # noqa: E402
 from ghostaudit.schemas import (  # noqa: E402
     OUTPUT_HEADER,
     Decision,
@@ -45,6 +44,7 @@ from ghostaudit.schemas import (  # noqa: E402
     LinkLayer,
     case_sort_key,
 )
+from ghostaudit.telemetry import get_logger  # noqa: E402
 
 log = get_logger("main")
 

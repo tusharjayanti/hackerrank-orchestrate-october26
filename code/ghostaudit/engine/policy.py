@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import NamedTuple
 
 from .. import DATASET_DIR
-from ..obs import get_logger
 from ..schemas import DataCategory, Observation, ObservedState, Operation, RequiredAction, ResourceState
+from ..telemetry import get_logger
 
 log = get_logger(__name__)
 

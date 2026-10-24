@@ -14,8 +14,8 @@ from datetime import datetime
 from typing import Any
 
 from ..identity import IdentityIndex, normalize_identifier
-from ..obs import get_logger
 from ..schemas import Coverage, DataCategory, Observation, ObservedState
+from ..telemetry import get_logger
 from .manifest import EvidenceFile, Manifest
 
 log = get_logger(__name__)

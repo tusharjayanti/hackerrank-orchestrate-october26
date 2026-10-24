@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Build code.zip from tracked files only (git archive), so .env, caches,
 # virtual environments, run outputs and the dataset can never ship.
-# Usage: code/package.sh            (writes code.zip at the repo root)
+# Organizer files (AGENTS.md, CLAUDE.md, problem_statement.md, ...) stay in
+# the repo but never ship: only the paths listed below are archived.
+# Usage: ./package.sh               (from any directory; writes code.zip at the repo root)
 set -euo pipefail
 
-root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-cd "$root"
+cd "$(dirname "$0")"
+cd "$(git rev-parse --show-toplevel)"
 
 required=(README.md code)
 optional=(pyproject.toml uv.lock requirements.txt .env.example)
@@ -39,6 +41,10 @@ fi
 if grep -Eiq '\.(zip|tar|gz|tgz|7z|rar)$' <<<"$tracked"; then
   echo "refusing: an archive is tracked inside the shipped paths:" >&2
   grep -Ei '\.(zip|tar|gz|tgz|7z|rar)$' <<<"$tracked" >&2
+  exit 1
+fi
+if grep -Eq '(^|/)(AGENTS|CLAUDE|HACKERRANK_README|problem_statement|agent_trace_instructions)\.md$' <<<"$tracked"; then
+  echo "refusing: an organizer file would ship" >&2
   exit 1
 fi
 if grep -q '^dataset/' <<<"$tracked"; then

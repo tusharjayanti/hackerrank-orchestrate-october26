@@ -18,7 +18,7 @@ guards** on every row (`guards.py`, applied in `main.py`: contract, policy
 contract, time + citation, COMPLETE re-derivation, regenerate then repair,
 cross-row check, exception wrapper) → `output.csv`, one trace per case under
 `runs/<mode>/<id>/traces/`, `llm_calls.jsonl`, run manifest. Cross-cutting:
-`obs.py` (structlog), `llm.py` (model client, content-keyed cache, call log,
+`telemetry.py` (structlog), `llm.py` (model client, content-keyed cache, call log,
 replay mode), `budget.py` (breaker), the `Flag` enum in `schemas.py`.
 
 ## 1. The problem
@@ -84,11 +84,11 @@ category, state from the record's fields, identifiers) also lives in one place.
 
 | Layer | Modules | Owns |
 |---|---|---|
-| L0 Ingestion, once per run | `ingest/manifest.py`, `parse_records.py`, `parse_sql.py`, `parse_logs.py`, `parse_vision.py`, `vision_prompts.py`, `observations.py`, `activity.py`; `identity.py`; `intent.py`, `intent_prompts.py` | the observation table, coverage records, the identity index (current and historical identifiers, reverse map), `system_activity` link facts and deletion-worker events, one intent per unique request text |
+| L0 Ingestion, once per run | `ingest/manifest.py`, `parse_records.py`, `parse_sql.py`, `parse_logs.py`, `parse_vision.py`, `observations.py`, `activity.py`; `identity.py`; `intent.py`; `prompts/intent.py`, `prompts/vision.py` | the observation table, coverage records, the identity index (current and historical identifiers, reverse map), `system_activity` link facts and deletion-worker events, one intent per unique request text |
 | L1 Engine, per case, pure functions | `engine/decide.py`, `linking.py`, `engine/state.py`, `engine/policy.py`, `engine/steps.py` | the decision: status and ordered, numbered steps |
-| L2 Investigator agent, flagged cases only | `agent/candidates.py`, `agent/loop.py`, `agent/tools.py`, `agent/prompts.py` | the choice between engine candidates on the cases the engine cannot settle |
+| L2 Investigator agent, flagged cases only | `agent/candidates.py`, `agent/loop.py`, `agent/tools.py`, `prompts/agent.py` | the choice between engine candidates on the cases the engine cannot settle |
 | L3 Guardrails, every row | `guards.py`, applied by `main.py` `decide_all` | whether a row may be written as decided, downgraded, regenerated or repaired |
-| L4 Observability | `obs.py`, `llm.py`, `budget.py`, `main.py` | structlog warnings at every fallback, a trace per case, a run manifest per run, the model call log, the spend breaker |
+| L4 Observability | `telemetry.py`, `llm.py`, `budget.py`, `main.py` | structlog warnings at every fallback, a trace per case, a run manifest per run, the model call log, the spend breaker |
 
 ## 5. Engine
 
@@ -181,7 +181,7 @@ calls). The deterministic engine (resolve → link → state → policy → step
 decides every case; its gate (`agent/candidates.py` `needs_agent`, three
 conditions) sends flagged cases to the agent with admissible engine-built
 candidates. The agent (`agent/loop.py` `run_agent`, `MODEL_AGENT`, ≤ 6
-turns) runs on a versioned prompt (`agent/prompts.py`: role, output, refusal,
+turns) runs on a versioned prompt (`prompts/agent.py`: role, output, refusal,
 constraints — stricter only — and two few-shot cases), reasons by reading raw
 files, comparing readings, applying the §6.5 conflict rule and choosing one
 candidate, and acts only through five strict tools (`agent/tools.py`);

@@ -44,7 +44,6 @@ from .engine.state import state_at
 from .engine.steps import build_steps
 from .ingest.manifest import CitationRegistry, parse_ts
 from .ingest.observations import category_for
-from .obs import get_logger
 from .schemas import (
     OUTPUT_HEADER,
     PHASE_ORDER,
@@ -62,6 +61,7 @@ from .schemas import (
     serialize_steps,
     step_sort_key,
 )
+from .telemetry import get_logger
 
 log = get_logger(__name__)
 

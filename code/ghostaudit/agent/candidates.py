@@ -192,7 +192,7 @@ def generate_candidates(world: World, request: dict, decision: Decision, trace: 
         try:
             raw.append((cid, description, make()))
         except Exception as e:  # noqa: BLE001 - a variant that cannot run is not offered
-            from ..obs import get_logger
+            from ..telemetry import get_logger
 
             get_logger(__name__).warning("agent_candidate_failed", candidate=cid, error=repr(e))
 

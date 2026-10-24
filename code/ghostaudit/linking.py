@@ -12,8 +12,8 @@ from datetime import datetime, timedelta
 
 from .ingest.activity import Activity
 from .ingest.observations import ObservationTable
-from .obs import get_logger
 from .schemas import LINK_CONFIDENCE, Link, LinkLayer, case_sort_key
+from .telemetry import get_logger
 
 log = get_logger(__name__)
 

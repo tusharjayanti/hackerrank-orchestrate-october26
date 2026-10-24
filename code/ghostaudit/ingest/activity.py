@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import DATASET_DIR
-from ..obs import get_logger
+from ..telemetry import get_logger
 from .manifest import parse_ts
 
 log = get_logger(__name__)

@@ -345,3 +345,25 @@ branch=main
 repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-25T05:55:00Z] Hygiene pass: repo layout and naming
+
+User Prompt (verbatim, secrets redacted):
+(continuation of the previous turn's request) Then the hygiene pass ... Commit as refactor: repo layout and hygiene.
+
+Agent Response Summary:
+Fail-closed measure run 20261024T212746Z-deletion-requests-8567627 (clean) changed only case_39 and case_55; output sha256 32c89163...1817; samples run 20261024T212757Z-sample-deletion-requests-83018ae unchanged at 1.000/1.000/0.912. Hygiene: package.sh moved to the repo root (cds to the git toplevel, refuses organizer files), obs.py renamed telemetry.py, the three prompt modules moved into ghostaudit/prompts/ (pure move, imports only), identity.py's leftover diagnostic main() removed and its TODO turned into a not-implemented note, evaluation/__init__.py given a docstring, .gitignore uses *.zip and drops the stale code/traces/ entry, stale local code/traces/ and .DS_Store files deleted. dataset/output.csv checked: still the organizer's header-only template. Tests 132 passed, ruff clean, replayed measure output sha256 unchanged.
+
+Actions:
+* git mv obs.py -> telemetry.py; intent_prompts.py, ingest/vision_prompts.py, agent/prompts.py -> prompts/{intent,vision,agent}.py; code/package.sh -> package.sh
+* Edited imports (18 modules), pyproject.toml per-file ignore path, .gitignore, identity.py
+* Edited README.md (setup: uv sync + python code/main.py from the root; packaging; layout), code/DESIGN.md, code/CODE_MAP.md
+* Ran pytest, ruff, replayed measure to scratch and compared sha256
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/Users/tushar/Desktop/Git/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none

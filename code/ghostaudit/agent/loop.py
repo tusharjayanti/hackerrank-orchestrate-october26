@@ -22,9 +22,9 @@ from typing import TYPE_CHECKING
 from .. import llm as llm_mod
 from ..budget import BudgetExceeded
 from ..llm import LLMUnavailable, image_block, model_for
-from ..obs import get_logger
+from ..prompts import agent as prompts
 from ..schemas import Decision, DeletionStatus, Flag, FlagSet, LinkLayer, ObservedState, Step
-from . import prompts
+from ..telemetry import get_logger
 from .candidates import ENGINE_DEFAULT, Candidate, generate_candidates, needs_agent
 from .tools import ALLOWED, Session, run_tool, tool_specs
 

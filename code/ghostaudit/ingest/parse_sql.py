@@ -18,8 +18,8 @@ import re
 import sqlite3
 from datetime import datetime
 
-from ..obs import get_logger
 from ..schemas import Coverage
+from ..telemetry import get_logger
 from .manifest import EvidenceFile, parse_ts
 from .observations import ParseResult, observe_record
 

@@ -35,6 +35,6 @@ select = ["E", "F", "W", "I", "B", "UP"]
 # The owner's hand-labelled gold set, kept verbatim on one line per row.
 "code/evaluation/intent_gold.py" = ["E501"]
 # Prompt text is exact: reflowing it changes the prompt and every cached answer.
-"code/ghostaudit/intent_prompts.py" = ["E501"]
+"code/ghostaudit/prompts/intent.py" = ["E501"]
 # Log-line fixtures reproduce real evidence syntax verbatim.
 "code/tests/test_ingest.py" = ["E501"]

@@ -30,8 +30,8 @@ from ..engine.policy import treat
 from ..identity import normalize_identifier
 from ..ingest.manifest import parse_ts
 from ..ingest.observations import category_for, text_identifiers
-from ..obs import get_logger
 from ..schemas import DataCategory, ObservedState, ResourceState
+from ..telemetry import get_logger
 
 if TYPE_CHECKING:
     from ..engine.decide import World

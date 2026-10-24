@@ -13,8 +13,8 @@ from __future__ import annotations
 import json
 import re
 
-from ..obs import get_logger
 from ..schemas import Coverage
+from ..telemetry import get_logger
 from .manifest import EvidenceFile, parse_ts
 from .observations import (
     ParseResult,
