@@ -5,6 +5,8 @@ whether the person asked for deletion, reconstructs every copy of their data
 that the evidence shows at the case's `audit_at`, applies
 `deletion_rules.csv`, and writes `output.csv` (`case_id,deletion_status,steps_json`).
 
+**Result:** ranked **#62** in HackerRank Orchestrate (October 2026). No per-metric scores were published.
+
 The organizer's original README is kept in the repository as `HACKERRANK_README.md` (it is not part of `code.zip`).
 
 ## Approach in brief
